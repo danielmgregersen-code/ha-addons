@@ -55,33 +55,59 @@ class IntervalsClient:
             })
         return simplified
 
-    def get_activity_detail(self, activity_id: str):
-        """Get full detail of a single activity including all metrics."""
-        return self._get(f"/athlete/{self.athlete_id}/activities/{activity_id}")
-
     def get_activity_intervals(self, activity_id: str):
-        """Get individual interval/lap data for an activity."""
-        data = self._get(f"/activity/{activity_id}/intervals")
+        """
+        Get individual interval/lap data for a specific activity.
+        The Intervals.icu API returns a dict with an 'intervals' key containing a list,
+        each entry representing one interval effort with full metrics.
+        """
+        try:
+            data = self._get(f"/activity/{activity_id}/intervals")
+        except requests.HTTPError as e:
+            return {"error": f"Could not fetch intervals: {e}", "activity_id": activity_id}
 
-        # Simplify each interval for the agent
+        # The API returns {"intervals": [...], ...} — handle both array and dict responses
+        if isinstance(data, list):
+            raw_intervals = data
+        elif isinstance(data, dict):
+            # Try common keys
+            raw_intervals = (
+                data.get("intervals")
+                or data.get("laps")
+                or data.get("data")
+                or []
+            )
+        else:
+            raw_intervals = []
+
+        if not raw_intervals:
+            return {
+                "activity_id": activity_id,
+                "interval_count": 0,
+                "message": "No interval data found for this activity. The workout may not have structured laps or intervals recorded.",
+                "raw_response_keys": list(data.keys()) if isinstance(data, dict) else str(type(data)),
+            }
+
         simplified = []
-        for iv in data.get("intervals", []):
+        for iv in raw_intervals:
+            if not isinstance(iv, dict):
+                continue
             simplified.append({
-                "label": iv.get("label"),
-                "type": iv.get("type"),           # work / rest / warmup / cooldown
-                "start_index": iv.get("start_index"),
-                "duration_seconds": iv.get("elapsed_time"),
+                "label": iv.get("label") or iv.get("name"),
+                "type": iv.get("type"),
+                "duration_seconds": iv.get("elapsed_time") or iv.get("moving_time"),
                 "distance_meters": iv.get("distance"),
-                "avg_power": iv.get("average_watts"),
-                "max_power": iv.get("max_watts"),
-                "avg_hr": iv.get("average_heartrate"),
-                "max_hr": iv.get("max_heartrate"),
-                "avg_pace_ms": iv.get("average_speed"),   # m/s — agent can convert
-                "avg_cadence": iv.get("average_cadence"),
-                "intensity_factor": iv.get("intensity"),
-                "tss": iv.get("training_load"),
-                "normalized_power": iv.get("nor_power"),
+                "avg_power": iv.get("average_watts") or iv.get("avg_power"),
+                "max_power": iv.get("max_watts") or iv.get("max_power"),
+                "normalized_power": iv.get("nor_power") or iv.get("normalized_power"),
+                "avg_hr": iv.get("average_heartrate") or iv.get("avg_hr"),
+                "max_hr": iv.get("max_heartrate") or iv.get("max_hr"),
+                "avg_speed_ms": iv.get("average_speed") or iv.get("avg_speed"),
+                "avg_cadence": iv.get("average_cadence") or iv.get("avg_cadence"),
+                "intensity_factor": iv.get("intensity") or iv.get("intensity_factor"),
+                "tss": iv.get("training_load") or iv.get("tss"),
             })
+
         return {
             "activity_id": activity_id,
             "interval_count": len(simplified),
