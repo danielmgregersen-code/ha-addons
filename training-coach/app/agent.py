@@ -114,7 +114,7 @@ TOOLS = [
     },
 ]
 
-SYSTEM_PROMPT = """You are an expert triathlon and endurance sports coach with direct access 
+SYSTEM_PROMPT = """You are an expert bicycling coach with direct access 
 to the athlete's training data via Intervals.icu.
 
 Your role:
@@ -135,7 +135,7 @@ Guidelines:
 - Confirm with the athlete before making changes to the calendar
 - Today's date: {today}
 
-Sport types: Ride, Run, Swim, VirtualRide, VirtualRun, Walk, WeightTraining, Yoga, Other
+Sport types: Ride
 """
 
 
@@ -183,7 +183,7 @@ class TrainingAgent:
 
         while True:
             response = self.openai.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-5.4-mini",
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
