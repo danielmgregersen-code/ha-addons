@@ -50,20 +50,24 @@ class IntervalsClient:
                 "avg_power": a.get("average_watts"),
                 "tss": a.get("icu_training_load"),
                 "intensity": a.get("icu_intensity"),
+                "rpe": a.get("icu_rpe"),
+                "feel": a.get("feel"),
                 "description": a.get("description"),
                 "coach_text": a.get("coach_text"),
             })
         return simplified
 
+    def get_activity_detail(self, activity_id: str):
+        """Get full detail of a single activity including all metrics."""
+        return self._get(f"/athlete/{self.athlete_id}/activities/{activity_id}")
+
     def get_activity_intervals(self, activity_id: str):
         """
         Get individual interval/lap data for a specific activity.
-        Response contains 'icu_intervals' (each effort) and 'icu_groups' (grouped sets).
+        Intervals.icu returns icu_intervals (each effort) and icu_groups (repeated sets).
         """
         try:
             data = self._get(f"/activity/{activity_id}/intervals")
-            print(f"DEBUG keys: {list(data.keys()) if isinstance(data, dict) else type(data)}", flush=True)
-            print(f"DEBUG icu_intervals count: {len(data.get('icu_intervals', []))}", flush=True)
         except Exception as e:
             return {"error": str(e), "activity_id": activity_id}
 
@@ -75,34 +79,34 @@ class IntervalsClient:
                 "activity_id": activity_id,
                 "interval_count": 0,
                 "message": "No interval data found for this activity.",
+                "available_keys": list(data.keys()) if isinstance(data, dict) else str(type(data)),
             }
 
         simplified = []
         for iv in raw_intervals:
             simplified.append({
-                "type": iv.get("type"),                          # WORK / RECOVERY
-                "group_id": iv.get("group_id"),                  # e.g. "599s@271w87rpm"
+                "type": iv.get("type"),                       # WORK / RECOVERY
+                "group_id": iv.get("group_id"),               # e.g. "599s@271w87rpm"
                 "duration_seconds": iv.get("moving_time"),
-                "distance_meters": round(iv.get("distance", 0), 1),
+                "distance_meters": round(iv.get("distance") or 0, 1),
                 "avg_power": iv.get("average_watts"),
                 "max_power": iv.get("max_watts"),
                 "normalized_power": iv.get("weighted_average_watts"),
                 "avg_hr": iv.get("average_heartrate"),
                 "max_hr": iv.get("max_heartrate"),
-                "avg_cadence": round(iv.get("average_cadence", 0)),
-                "intensity_pct": iv.get("intensity"),            # % of FTP
-                "tss": round(iv.get("training_load", 0), 1),
+                "avg_cadence": round(iv.get("average_cadence") or 0),
+                "intensity_pct": iv.get("intensity"),
+                "tss": round(iv.get("training_load") or 0, 1),
                 "zone": iv.get("zone"),
                 "decoupling_pct": iv.get("decoupling"),
                 "joules_above_ftp": iv.get("joules_above_ftp"),
             })
 
-        # Summarise groups (repeated interval sets)
         groups = []
         for g in raw_groups:
             groups.append({
-                "group_id": g.get("id"),                         # e.g. "599s@271w87rpm"
-                "count": g.get("count"),                         # how many reps
+                "group_id": g.get("id"),
+                "count": g.get("count"),
                 "avg_power": g.get("average_watts"),
                 "avg_hr": g.get("average_heartrate"),
                 "zone": g.get("zone"),
@@ -126,10 +130,27 @@ class IntervalsClient:
     def get_events(self, days_ahead: int = 21):
         oldest = datetime.now().strftime("%Y-%m-%d")
         newest = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-        return self._get(
+        events = self._get(
             f"/athlete/{self.athlete_id}/events",
             params={"oldest": oldest, "newest": newest},
         )
+        simplified = []
+        for e in events:
+            simplified.append({
+                "id": e.get("id"),
+                "date": e.get("start_date_local", "")[:10],
+                "name": e.get("name"),
+                "category": e.get("category"),        # WORKOUT, RACE_A, RACE_B, RACE_C, etc.
+                "type": e.get("type"),                 # GravelRide, Ride, Run, Swim, etc.
+                "sub_type": e.get("sub_type"),         # NONE, RACE, WARMUP, COOLDOWN, COMMUTE
+                "description": e.get("description"),
+                "duration_seconds": e.get("moving_time"),
+                "distance_meters": e.get("distance"),
+                "tss": e.get("icu_training_load"),
+                "indoor": e.get("indoor"),
+                "tags": e.get("tags"),
+            })
+        return simplified
 
     def post_activity_comment(self, activity_id: str, comment: str):
         return self._put(
