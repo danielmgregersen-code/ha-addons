@@ -110,7 +110,7 @@
   .bubble {
     padding: 12px 16px; border-radius: var(--radius);
     font-size: 13.5px; line-height: 1.65;
-    white-space: pre-wrap; word-break: break-word;
+
   }
 
   .message.user .bubble {
@@ -123,6 +123,31 @@
     background: var(--coach-bubble);
     border: 1px solid var(--border);
     border-bottom-left-radius: 3px;
+  }
+
+  /* Markdown rendered content inside coach bubbles */
+  .message.coach .bubble p { margin: 0 0 8px; }
+  .message.coach .bubble p:last-child { margin-bottom: 0; }
+  .message.coach .bubble ul, .message.coach .bubble ol { margin: 4px 0 8px 18px; }
+  .message.coach .bubble li { margin-bottom: 3px; }
+  .message.coach .bubble strong { color: var(--accent); font-weight: 600; }
+  .message.coach .bubble em { color: var(--accent2); }
+  .message.coach .bubble h1, .message.coach .bubble h2, .message.coach .bubble h3 {
+    font-family: 'Syne', sans-serif; font-weight: 700;
+    color: var(--text); margin: 10px 0 6px;
+    font-size: 14px; letter-spacing: 0.02em;
+  }
+  .message.coach .bubble code {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 5px; font-size: 12px;
+  }
+  .message.coach .bubble pre {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 8px 0;
+  }
+  .message.coach .bubble pre code { background: none; border: none; padding: 0; }
+  .message.coach .bubble hr {
+    border: none; border-top: 1px solid var(--border); margin: 10px 0;
   }
 
   .history-divider {
@@ -220,6 +245,7 @@
   #send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
   #send-btn svg { width: 18px; height: 18px; color: #0d0f14; }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 </head>
 <body>
 
@@ -293,13 +319,22 @@
     return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
+  function renderContent(role, text) {
+    if (role === 'coach') {
+      // Render markdown for coach messages
+      return marked.parse(text, { breaks: true });
+    }
+    // User messages: plain escaped text
+    return `<span style="white-space:pre-wrap">${escapeHtml(text)}</span>`;
+  }
+
   function addMessage(role, text, animate = true) {
     const wrap = document.createElement('div');
     wrap.className = `message ${role}`;
     if (!animate) wrap.style.animation = 'none';
     wrap.innerHTML = `
       <div class="msg-label">${role === 'user' ? 'YOU' : 'COACH'}</div>
-      <div class="bubble">${escapeHtml(text)}</div>
+      <div class="bubble">${renderContent(role, text)}</div>
     `;
     messagesEl.appendChild(wrap);
     return wrap;
