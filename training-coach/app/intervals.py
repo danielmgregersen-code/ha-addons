@@ -62,6 +62,8 @@ class IntervalsClient:
         """
         try:
             data = self._get(f"/activity/{activity_id}/intervals")
+            print(f"DEBUG keys: {list(data.keys()) if isinstance(data, dict) else type(data)}", flush=True)
+            print(f"DEBUG icu_intervals count: {len(data.get('icu_intervals', []))}", flush=True)
         except Exception as e:
             return {"error": str(e), "activity_id": activity_id}
 
