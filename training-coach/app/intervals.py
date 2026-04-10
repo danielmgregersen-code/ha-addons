@@ -55,6 +55,39 @@ class IntervalsClient:
             })
         return simplified
 
+    def get_activity_detail(self, activity_id: str):
+        """Get full detail of a single activity including all metrics."""
+        return self._get(f"/athlete/{self.athlete_id}/activities/{activity_id}")
+
+    def get_activity_intervals(self, activity_id: str):
+        """Get individual interval/lap data for an activity."""
+        data = self._get(f"/activity/{activity_id}/intervals")
+
+        # Simplify each interval for the agent
+        simplified = []
+        for iv in data.get("intervals", []):
+            simplified.append({
+                "label": iv.get("label"),
+                "type": iv.get("type"),           # work / rest / warmup / cooldown
+                "start_index": iv.get("start_index"),
+                "duration_seconds": iv.get("elapsed_time"),
+                "distance_meters": iv.get("distance"),
+                "avg_power": iv.get("average_watts"),
+                "max_power": iv.get("max_watts"),
+                "avg_hr": iv.get("average_heartrate"),
+                "max_hr": iv.get("max_heartrate"),
+                "avg_pace_ms": iv.get("average_speed"),   # m/s — agent can convert
+                "avg_cadence": iv.get("average_cadence"),
+                "intensity_factor": iv.get("intensity"),
+                "tss": iv.get("training_load"),
+                "normalized_power": iv.get("nor_power"),
+            })
+        return {
+            "activity_id": activity_id,
+            "interval_count": len(simplified),
+            "intervals": simplified,
+        }
+
     def get_wellness(self, days_back: int = 14):
         oldest = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
         newest = datetime.now().strftime("%Y-%m-%d")

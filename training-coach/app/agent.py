@@ -7,7 +7,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_recent_activities",
-            "description": "Fetch the athlete's recent activities/workouts from Intervals.icu.",
+            "description": "Fetch the athlete's recent activities/workouts from Intervals.icu. Use this to review training history.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -19,8 +19,30 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_activity_intervals",
+            "description": (
+                "Fetch detailed interval/lap breakdown for a specific activity. "
+                "Use this when the athlete asks how their intervals went, whether they hit targets, "
+                "how work vs rest periods compared, or for any deep analysis of a single session. "
+                "Requires an activity_id — fetch recent activities first if you don't have it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "activity_id": {
+                        "type": "string",
+                        "description": "The Intervals.icu activity ID.",
+                    }
+                },
+                "required": ["activity_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_wellness",
-            "description": "Fetch the athlete's wellness data (HRV, resting HR, sleep, fatigue, form).",
+            "description": "Fetch the athlete's wellness data (HRV, resting HR, sleep, fatigue, form) from Intervals.icu.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -92,25 +114,28 @@ TOOLS = [
     },
 ]
 
-SYSTEM_PROMPT = """You are an expert bicycling coach with direct access 
+SYSTEM_PROMPT = """You are an expert triathlon and endurance sports coach with direct access 
 to the athlete's training data via Intervals.icu.
 
 Your role:
 - Analyse recent training and provide honest, specific feedback
-- Comment on individual workouts when asked
-- Plan and schedule future workouts based on the athlete's goals and fatigue
+- Drill into individual interval sessions when asked — compare work efforts, check if targets were hit
+- Comment on completed workouts
+- Plan and schedule future workouts based on goals and fatigue
 - Adjust training plans based on athlete requests or wellness data
-- Explain your reasoning clearly
 
 Guidelines:
-- Always fetch relevant data before commenting — don't assume what workouts look like
-- When creating planned workouts, write detailed descriptions with warm-up, main set, and cool-down
-- Be specific with target power zones
-- Consider cumulative fatigue — check wellness and recent load before adding hard sessions
+- Always fetch relevant data before commenting — never assume what a workout looks like
+- For interval analysis: fetch activities first to get the ID, then fetch intervals for that activity
+- When analysing intervals, comment on consistency across efforts, power/HR drift, 
+  work-to-rest ratio, and whether targets were met
+- Speed is stored as m/s — convert to min/km (pace = 1000/speed/60) or km/h as appropriate
+- When creating planned workouts, write detailed descriptions: warm-up, main set, cool-down with targets
+- Consider cumulative fatigue before adding hard sessions
 - Confirm with the athlete before making changes to the calendar
 - Today's date: {today}
 
-Sport types: Ride
+Sport types: Ride, Run, Swim, VirtualRide, VirtualRun, Walk, WeightTraining, Yoga, Other
 """
 
 
@@ -123,6 +148,8 @@ class TrainingAgent:
         try:
             if name == "get_recent_activities":
                 result = self.icu.get_activities(args.get("days_back", 14))
+            elif name == "get_activity_intervals":
+                result = self.icu.get_activity_intervals(args["activity_id"])
             elif name == "get_wellness":
                 result = self.icu.get_wellness(args.get("days_back", 14))
             elif name == "get_planned_workouts":
@@ -156,7 +183,7 @@ class TrainingAgent:
 
         while True:
             response = self.openai.chat.completions.create(
-                model="gpt-5.4",
+                model="gpt-4o",
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
