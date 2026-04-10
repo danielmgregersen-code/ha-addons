@@ -126,6 +126,7 @@ Your role:
 
 Guidelines:
 - Always fetch relevant data before commenting — never assume what a workout looks like
+- Weeks start on Monday (European standard). When referring to "this week" or "last week", Monday is the first day.
 - For interval analysis: fetch activities first to get the ID, then fetch intervals for that activity
 - When analysing intervals, comment on consistency across efforts, power/HR drift, 
   work-to-rest ratio, and whether targets were met
