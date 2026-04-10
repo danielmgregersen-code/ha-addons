@@ -179,4 +179,13 @@ def debug_intervals(activity_id: str):
         "response": r.json() if r.status_code == 200 else r.text[:500],
     }
 
+@app.get("/debug/test-intervals")
+async def test_intervals():
+    activities = agent.icu.get_activities(days_back=7)
+    if not activities:
+        return {"error": "no activities found"}
+    activity_id = activities[0]["id"]
+    result = agent.icu.get_activity_intervals(activity_id)
+    return {"activity_id": activity_id, "result": result}
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
