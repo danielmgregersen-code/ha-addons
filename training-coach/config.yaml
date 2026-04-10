@@ -17,8 +17,8 @@ options:
   openai_api_key: ""
   intervals_athlete_id: ""
   intervals_api_key: ""
-  days_back: 14
-  days_ahead: 21
+  days_back: 28
+  days_ahead: 56
 
 schema:
   openai_api_key: str
