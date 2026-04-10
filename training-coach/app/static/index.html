@@ -52,7 +52,6 @@
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
   }
-
   .logo svg { width: 20px; height: 20px; }
 
   .header-text h1 {
@@ -60,7 +59,6 @@
     font-weight: 800; font-size: 15px;
     color: var(--text); letter-spacing: 0.02em;
   }
-
   .header-text p { font-size: 11px; color: var(--muted); margin-top: 1px; }
 
   .status-dot {
@@ -76,7 +74,7 @@
     font-size: 11px; padding: 5px 10px; border-radius: 6px;
     cursor: pointer; transition: all 0.15s;
   }
-  #clear-btn:hover { border-color: var(--muted); color: var(--text); }
+  #clear-btn:hover { border-color: var(--accent); color: var(--accent); }
 
   #messages {
     flex: 1; overflow-y: auto;
@@ -125,6 +123,16 @@
     background: var(--coach-bubble);
     border: 1px solid var(--border);
     border-bottom-left-radius: 3px;
+  }
+
+  .history-divider {
+    display: flex; align-items: center; gap: 10px;
+    color: var(--muted); font-size: 11px;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    margin: 4px 0;
+  }
+  .history-divider::before, .history-divider::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
   }
 
   .thinking {
@@ -233,23 +241,7 @@
   </div>
 </header>
 
-<div id="messages">
-  <div class="welcome" id="welcome">
-    <div class="welcome-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="#0d0f14" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
-      </svg>
-    </div>
-    <h2>Ready to train smarter</h2>
-    <p>Ask me about your recent workouts, interval analysis, upcoming plan, or request changes to your calendar.</p>
-    <div class="suggestions">
-      <button class="suggestion" onclick="sendSuggestion(this)">How did my training look this past week?</button>
-      <button class="suggestion" onclick="sendSuggestion(this)">Analyse my intervals from yesterday</button>
-      <button class="suggestion" onclick="sendSuggestion(this)">What does my upcoming plan look like?</button>
-      <button class="suggestion" onclick="sendSuggestion(this)">I'm feeling fatigued — ease up next week</button>
-    </div>
-  </div>
-</div>
+<div id="messages"></div>
 
 <div class="input-area">
   <textarea id="input" placeholder="Ask your coach…" rows="1"></textarea>
@@ -261,15 +253,22 @@
 </div>
 
 <script>
-  // Ingress base path injected by server — empty string when accessed directly
   const BASE = '__INGRESS_PATH__';
 
-  const sessionId = Math.random().toString(36).slice(2);
+  // Persist session ID in localStorage so it survives page reloads
+  let sessionId = localStorage.getItem('coach_session_id');
+  if (!sessionId) {
+    sessionId = Math.random().toString(36).slice(2);
+    localStorage.setItem('coach_session_id', sessionId);
+  }
+
   const messagesEl = document.getElementById('messages');
   const inputEl = document.getElementById('input');
   const sendBtn = document.getElementById('send-btn');
   let busy = false;
+  let historyLoaded = false;
 
+  // Auto-resize textarea
   inputEl.addEventListener('input', () => {
     inputEl.style.height = 'auto';
     inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
@@ -280,25 +279,52 @@
   });
 
   document.getElementById('clear-btn').addEventListener('click', async () => {
+    if (!confirm('Clear this conversation?')) return;
     await fetch(`${BASE}/chat/${sessionId}`, { method: 'DELETE' });
-    location.reload();
+    // Generate a new session ID
+    sessionId = Math.random().toString(36).slice(2);
+    localStorage.setItem('coach_session_id', sessionId);
+    messagesEl.innerHTML = '';
+    historyLoaded = false;
+    showWelcome();
   });
 
-  function sendSuggestion(btn) {
-    inputEl.value = btn.textContent;
-    send();
+  function escapeHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
-  function addMessage(role, text) {
-    document.getElementById('welcome')?.remove();
+  function addMessage(role, text, animate = true) {
     const wrap = document.createElement('div');
     wrap.className = `message ${role}`;
+    if (!animate) wrap.style.animation = 'none';
     wrap.innerHTML = `
       <div class="msg-label">${role === 'user' ? 'YOU' : 'COACH'}</div>
       <div class="bubble">${escapeHtml(text)}</div>
     `;
     messagesEl.appendChild(wrap);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return wrap;
+  }
+
+  function showWelcome() {
+    const div = document.createElement('div');
+    div.className = 'welcome';
+    div.id = 'welcome';
+    div.innerHTML = `
+      <div class="welcome-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#0d0f14" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+        </svg>
+      </div>
+      <h2>Ready to train smarter</h2>
+      <p>Ask me about your recent workouts, interval analysis, upcoming plan, or request changes to your calendar.</p>
+      <div class="suggestions">
+        <button class="suggestion" onclick="sendSuggestion(this)">How did my training look this past week?</button>
+        <button class="suggestion" onclick="sendSuggestion(this)">Analyse my intervals from yesterday</button>
+        <button class="suggestion" onclick="sendSuggestion(this)">What does my upcoming plan look like?</button>
+        <button class="suggestion" onclick="sendSuggestion(this)">I'm feeling fatigued — ease up next week</button>
+      </div>
+    `;
+    messagesEl.appendChild(div);
   }
 
   function showThinking() {
@@ -311,18 +337,51 @@
 
   function hideThinking() { document.getElementById('thinking')?.remove(); }
 
-  function escapeHtml(str) {
-    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  function sendSuggestion(btn) {
+    document.getElementById('welcome')?.remove();
+    inputEl.value = btn.textContent;
+    send();
+  }
+
+  // Load previous conversation history from server on page load
+  async function loadHistory() {
+    try {
+      const res = await fetch(`${BASE}/history/${sessionId}`);
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      if (data.messages && data.messages.length > 0) {
+        // Add a divider showing this is restored history
+        const divider = document.createElement('div');
+        divider.className = 'history-divider';
+        divider.textContent = 'Previous conversation';
+        messagesEl.appendChild(divider);
+
+        for (const msg of data.messages) {
+          addMessage(msg.role === 'user' ? 'user' : 'coach', msg.content, false);
+        }
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        historyLoaded = true;
+      } else {
+        showWelcome();
+      }
+    } catch {
+      showWelcome();
+    }
   }
 
   async function send() {
     if (busy) return;
     const text = inputEl.value.trim();
     if (!text) return;
+
+    document.getElementById('welcome')?.remove();
+
     busy = true; sendBtn.disabled = true;
     inputEl.value = ''; inputEl.style.height = 'auto';
+
     addMessage('user', text);
     showThinking();
+
     try {
       const res = await fetch(`${BASE}/chat`, {
         method: 'POST',
@@ -338,8 +397,12 @@
       addMessage('coach', `⚠ Error: ${e.message}`);
     } finally {
       busy = false; sendBtn.disabled = false; inputEl.focus();
+      messagesEl.scrollTop = messagesEl.scrollHeight;
     }
   }
+
+  // Restore history on load
+  loadHistory();
 </script>
 </body>
 </html>
