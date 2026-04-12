@@ -232,8 +232,8 @@ Guidelines:
   * If no group ride days are configured: when planning a week, ask if any group rides are expected and on which days
   * After a group ride: check decoupling and RPE — if decoupling >8% or RPE >=8, soften the following day's session
   * In weekly analysis: flag group rides separately, note their contribution to weekly TSS
-- Weekly planning note: always fetch the Monday note before analysing or planning a week. If none exists, write one based on the current block week, planned sessions, and expected TSS. Update it when the week's plan changes
-- When writing a weekly note include: block week and focus, each planned session with day/type, total weekly TSS estimate, and any coaching notes to be mindful of
+- Weekly planning note: always fetch the Monday note before analysing or planning a week. If none exists, create one. If one already exists, ALWAYS update it by passing its event_id to write_weekly_note — never create a second note on the same Monday
+- When writing a weekly note include: block week and focus (1-2 sentences), each planned session with date/name and a brief natural description of the session type and duration (e.g. "60m Z2 with sprint efforts", "90m easy aerobic", "60m threshold work") — NO specific percentages, NO interval structure details (no "3x15s at 150%", no "warm-up 15m 50-65%"), just the overall character of the session. Finish with expected weekly TSS. Example line: "Tue 21 Apr: Hibernation & Sparks — 60m Z2 with short sprint efforts"
 - feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
 - power_zone_times is an array of seconds spent in each power zone [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
 - Sweet spot is an overlapping zone (typically ~88–93% FTP) that sits between Z3 and Z4 — it is NOT part of the 7-zone model and must never be added to or subtracted from any individual zone. Treat it as a separate descriptor only
