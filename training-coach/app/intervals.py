@@ -187,7 +187,7 @@ class IntervalsClient:
             event["moving_time"] = planned_duration_seconds
         if planned_tss:
             event["icu_training_load"] = planned_tss
-        return self._post(f"/athlete/{self.athlete_id}/events", [event])
+        return self._post(f"/athlete/{self.athlete_id}/events", event)
 
     def update_planned_workout(
         self,
