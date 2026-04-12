@@ -138,6 +138,44 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_weekly_note",
+            "description": (
+                "Fetch the weekly planning note from Monday of a given week. "
+                "Always check this before planning or reviewing a week — it contains the overall intent and focus for that week."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "monday_date": {"type": "string", "description": "Date of Monday in YYYY-MM-DD format."}
+                },
+                "required": ["monday_date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_weekly_note",
+            "description": (
+                "Create or update the weekly planning note on Monday of a given week. "
+                "Write one when none exists, or update when the plan changes. "
+                "Include: block week number, weekly focus, planned sessions with targets, and expected TSS."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "monday_date": {"type": "string", "description": "YYYY-MM-DD of the Monday."},
+                    "name": {"type": "string", "description": "Short title e.g. 'Week 2 — Build'"},
+                    "content": {"type": "string", "description": "Full weekly plan content."},
+                    "event_id": {"type": "integer", "description": "Existing event ID if updating rather than creating."},
+                },
+                "required": ["monday_date", "name", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "delete_planned_workout",
             "description": "Delete a planned workout from the athlete's Intervals.icu calendar.",
             "parameters": {
@@ -158,6 +196,16 @@ Athlete baselines:
 {hrv_context}
 {rhr_context}
 
+Block periodization:
+{block_context}
+Hard interval sessions per week: {hard_intervals_per_week}
+
+Block structure:
+- Week 1 (Foundation): aerobic base, zone 2 focus, {hard_intervals_per_week} light interval sessions (e.g. tempo or sweet spot), moderate TSS
+- Week 2 (Build): increase load ~10%, {hard_intervals_per_week} structured interval sessions (threshold or VO2), higher TSS
+- Week 3 (Peak): highest load of the block, {hard_intervals_per_week} hard interval sessions (VO2max or above threshold), push TSS
+- Week 4 (Recovery): drop volume to ~50-60% of peak week, no hard intervals, zone 1-2 only, let adaptations consolidate
+
 Your role:
 - Analyse recent training and provide honest, specific feedback
 - Drill into individual interval sessions when asked — compare work efforts, check if targets were hit
@@ -175,6 +223,8 @@ Guidelines:
 - When creating planned workouts, write detailed descriptions: warm-up, main set, cool-down with targets
 - Consider cumulative fatigue before adding hard sessions
 - Confirm with the athlete before making changes to the calendar
+- Weekly planning note: always fetch the Monday note before analysing or planning a week. If none exists, write one based on the current block week, planned sessions, and expected TSS. Update it when the week's plan changes
+- When writing a weekly note include: block week and focus, each planned session with day/type/targets/duration, total weekly TSS estimate
 - feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
 - power_zone_times is an array of seconds spent in each power zone [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
 - Sweet spot is an overlapping zone (typically ~88–93% FTP) that sits between Z3 and Z4 — it is NOT part of the 7-zone model and must never be added to or subtracted from any individual zone. Treat it as a separate descriptor only
@@ -204,6 +254,8 @@ class TrainingAgent:
         hrv_max: int = 0,
         rhr_min: int = 0,
         rhr_max: int = 0,
+        hard_intervals_per_week: int = 2,
+        block_start_date: str = "",
     ):
         self.openai = OpenAI(api_key=openai_api_key)
         self.icu = IntervalsClient(intervals_athlete_id, intervals_api_key)
@@ -211,6 +263,8 @@ class TrainingAgent:
         self.hrv_max = hrv_max
         self.rhr_min = rhr_min
         self.rhr_max = rhr_max
+        self.hard_intervals_per_week = hard_intervals_per_week
+        self.block_start_date = block_start_date
 
     def _run_tool(self, name: str, args: dict) -> str:
         try:
@@ -250,6 +304,18 @@ class TrainingAgent:
                     planned_tss=args.get("planned_tss"),
                     category=args.get("category"),
                 )
+            elif name == "get_weekly_note":
+                result = self.icu.get_weekly_note(args["monday_date"])
+                if result is None:
+                    result = {"found": False, "monday_date": args["monday_date"],
+                              "message": "No weekly note found for this Monday."}
+            elif name == "write_weekly_note":
+                result = self.icu.write_weekly_note(
+                    monday_date=args["monday_date"],
+                    name=args["name"],
+                    content=args["content"],
+                    event_id=args.get("event_id"),
+                )
             elif name == "delete_planned_workout":
                 result = self.icu.delete_event(args["event_id"])
             else:
@@ -272,10 +338,30 @@ class TrainingAgent:
             f"Resting HR typical value: ~{self.rhr_max} bpm." if self.rhr_max else
             "Resting HR range: not configured."
         )
+        from datetime import date as date_cls
+        today = date_cls.today()
+
+        # Calculate block week
+        block_context = ""
+        if self.block_start_date:
+            try:
+                block_start = date_cls.fromisoformat(self.block_start_date)
+                days_in = (today - block_start).days
+                block_week = (days_in // 7) % 4 + 1
+                week_label = {1: "Week 1 — Foundation", 2: "Week 2 — Build",
+                              3: "Week 3 — Peak", 4: "Week 4 — Recovery"}[block_week]
+                block_context = f"Current block week: {block_week}/4 ({week_label})"
+            except Exception:
+                block_context = "Block start date is set but could not be parsed (use YYYY-MM-DD)."
+        else:
+            block_context = "Block start date not configured — ask the athlete which week of the block they are in if relevant."
+
         return SYSTEM_PROMPT.format(
-            today=date.today().isoformat(),
+            today=today.isoformat(),
             hrv_context=hrv_context,
             rhr_context=rhr_context,
+            block_context=block_context,
+            hard_intervals_per_week=self.hard_intervals_per_week,
         )
 
     def chat(self, user_message: str, history: list) -> tuple[str, list]:
