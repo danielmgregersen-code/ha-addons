@@ -68,7 +68,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "post_activity_comment",
-            "description": "Post a coach comment on a completed activity in Intervals.icu.",
+            "description": "Post a coach comment on a completed activity in Intervals.icu. The comment is written to the activity description field.",
             "parameters": {
                 "type": "object",
                 "properties": {
