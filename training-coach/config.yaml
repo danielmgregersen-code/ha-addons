@@ -1,6 +1,6 @@
 name: "Training Coach"
 description: "AI coaching agent connected to your Intervals.icu training data."
-version: "1.1.15"
+version: "1.1.16"
 slug: "training_coach"
 init: false
 arch:
@@ -24,8 +24,8 @@ options:
   openai_api_key: ""
   intervals_athlete_id: ""
   intervals_api_key: ""
-  days_back: 56
-  days_ahead: 56
+  days_back: 28
+  days_ahead: 21
   hrv_min: 0
   hrv_max: 0
   rhr_min: 0
@@ -33,8 +33,8 @@ options:
   hard_intervals_per_week: 2
   block_start_date: ""
   group_ride_days: ""
-  group_ride_weekday_tss: 120
-  group_ride_weekend_tss: 180
+  group_ride_weekday_tss: 60
+  group_ride_weekend_tss: 90
   group_ride_keywords: "group,club,fondo,race"
 
 schema:
