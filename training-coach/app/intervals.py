@@ -52,6 +52,8 @@ class IntervalsClient:
                 "intensity": a.get("icu_intensity"),
                 "rpe": a.get("icu_rpe"),
                 "feel": a.get("feel"),
+                "power_zone_times": a.get("icu_zone_times"),   # seconds per power zone [Z1..Z7]
+                "hr_zone_times": a.get("icu_hr_zone_times"),   # seconds per HR zone [Z1..Z5]
                 "description": a.get("description"),
                 "coach_text": a.get("coach_text"),
             })
