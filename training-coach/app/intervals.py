@@ -61,8 +61,7 @@ class IntervalsClient:
                 "polarization_index": a.get("polarization_index"),  # training polarization score
                 "strain_score": a.get("strain_score"),              # overall strain
                 "avg_cadence": a.get("average_cadence"),
-                "description": a.get("description"),
-                "coach_text": a.get("coach_text"),
+                "description": a.get("description"),  # also used for coach comments
             })
         return simplified
 
@@ -162,10 +161,10 @@ class IntervalsClient:
         return simplified
 
     def post_activity_comment(self, activity_id: str, comment: str):
-        # Correct endpoint: PUT /api/v1/activity/{id} (no athlete ID in path)
+        # PUT /api/v1/activity/{id} — uses description field (coach_text does not exist in API)
         return self._put(
             f"/activity/{activity_id}",
-            {"coach_text": comment},
+            {"description": comment},
         )
 
     def create_planned_workout(
