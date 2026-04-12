@@ -216,7 +216,7 @@ class TrainingAgent:
 
         while True:
             response = self.openai.chat.completions.create(
-                model="gpt-4o-mini",  # NOTE: replace with gpt-4o for better reasoning
+                model="gpt-5.4-mini",
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
