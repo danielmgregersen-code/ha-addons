@@ -2,7 +2,6 @@ import json
 import os
 import asyncio
 from datetime import datetime, timedelta
-from collections import deque
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -12,11 +11,11 @@ from agent import TrainingAgent
 
 OPTIONS_FILE = "/data/options.json"
 HISTORY_FILE = "/data/chat_history.json"
+NOTIFICATIONS_FILE = "/data/notifications.json"
 MAX_HISTORY_MESSAGES = 200
-POLL_INTERVAL_SECONDS = 120  # 2 minutes
-
-# Notification queue — stores auto-review notifications for the UI to pick up
-notifications: deque = deque(maxlen=50)
+MAX_NOTIFICATIONS = 100
+POLL_INTERVAL_SECONDS = 120
+AUTO_REVIEW_SESSION = "auto-reviews"  # Fixed session for auto-review history
 
 
 def load_options() -> dict:
@@ -54,6 +53,41 @@ def save_sessions(sessions: dict):
         print(f"Warning: could not save chat history: {e}", flush=True)
 
 
+def load_notifications() -> list:
+    if os.path.exists(NOTIFICATIONS_FILE):
+        try:
+            with open(NOTIFICATIONS_FILE) as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+def save_notifications(notifs: list):
+    try:
+        with open(NOTIFICATIONS_FILE, "w") as f:
+            json.dump(notifs[-MAX_NOTIFICATIONS:], f)
+    except Exception as e:
+        print(f"Warning: could not save notifications: {e}", flush=True)
+
+
+def append_to_auto_review_session(sessions: dict, activity_name: str, activity_date: str, comment: str):
+    """Add an auto-review comment to the dedicated auto-reviews session."""
+    history = sessions.get(AUTO_REVIEW_SESSION, [])
+    # Add a synthetic user message as context, then the coach reply
+    history.append({
+        "role": "user",
+        "content": f"[Auto-review] {activity_name} — {activity_date}",
+    })
+    history.append({
+        "role": "assistant",
+        "content": comment,
+    })
+    if len(history) > MAX_HISTORY_MESSAGES:
+        history = history[-MAX_HISTORY_MESSAGES:]
+    sessions[AUTO_REVIEW_SESSION] = history
+
+
 options = load_options()
 
 if not options.get("openai_api_key"):
@@ -64,6 +98,7 @@ if not options.get("intervals_api_key"):
     raise RuntimeError("intervals_api_key is not configured.")
 
 sessions: dict[str, list] = load_sessions()
+notifications: list = load_notifications()
 
 agent = TrainingAgent(
     openai_api_key=options["openai_api_key"],
@@ -78,7 +113,6 @@ agent = TrainingAgent(
 
 # ── Background auto-review polling ──
 async def auto_review_loop():
-    """Polls for new unreviewed activities every POLL_INTERVAL_SECONDS."""
     last_checked = datetime.now() - timedelta(hours=1)
     print("Auto-review polling started.", flush=True)
     while True:
@@ -88,12 +122,13 @@ async def auto_review_loop():
             last_checked = datetime.now()
             new_activities = agent.icu.get_activities_since(since)
             for activity in new_activities:
-                # Skip if already reviewed (has a coach tick)
                 if activity.get("coach_tick"):
                     continue
-                print(f"Auto-reviewing new activity: {activity.get('name')} ({activity.get('id')})", flush=True)
+                print(f"Auto-reviewing: {activity.get('name')} ({activity.get('id')})", flush=True)
                 comment = agent.auto_review(activity)
-                notifications.append({
+
+                # Build notification
+                notif = {
                     "id": f"auto-{activity['id']}",
                     "timestamp": datetime.now().isoformat(),
                     "activity_id": activity["id"],
@@ -101,8 +136,23 @@ async def auto_review_loop():
                     "activity_date": activity.get("date", ""),
                     "comment": comment,
                     "type": "auto_review",
-                })
-                print(f"Auto-review posted for {activity.get('id')}", flush=True)
+                    "seen": False,
+                }
+
+                # Store in persistent notifications
+                notifications.append(notif)
+                save_notifications(notifications)
+
+                # Log to auto-reviews session
+                append_to_auto_review_session(
+                    sessions,
+                    activity.get("name", "Unnamed activity"),
+                    activity.get("date", ""),
+                    comment,
+                )
+                save_sessions(sessions)
+
+                print(f"Auto-review done for {activity.get('id')}", flush=True)
         except Exception as e:
             print(f"Auto-review error: {e}", flush=True)
 
@@ -186,7 +236,7 @@ def list_sessions():
 
 @app.get("/notifications")
 def get_notifications(since: str = None):
-    """Return pending auto-review notifications, optionally filtered by timestamp."""
+    """Return notifications, optionally filtered to only those after a timestamp."""
     all_notifs = list(notifications)
     if since:
         try:
@@ -195,6 +245,16 @@ def get_notifications(since: str = None):
         except Exception:
             pass
     return {"notifications": all_notifs}
+
+
+@app.post("/notifications/{notif_id}/seen")
+def mark_seen(notif_id: str):
+    """Mark a notification as seen."""
+    for n in notifications:
+        if n["id"] == notif_id:
+            n["seen"] = True
+    save_notifications(notifications)
+    return {"ok": True}
 
 
 @app.get("/health")
