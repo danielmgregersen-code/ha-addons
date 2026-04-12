@@ -153,8 +153,9 @@ class IntervalsClient:
         return simplified
 
     def post_activity_comment(self, activity_id: str, comment: str):
+        # Correct endpoint: PUT /api/v1/activity/{id} (no athlete ID in path)
         return self._put(
-            f"/athlete/{self.athlete_id}/activity/{activity_id}",
+            f"/activity/{activity_id}",
             {"coach_text": comment},
         )
 
@@ -179,6 +180,28 @@ class IntervalsClient:
         if planned_tss:
             event["icu_training_load"] = planned_tss
         return self._post(f"/athlete/{self.athlete_id}/events", [event])
+
+    def update_planned_workout(
+        self,
+        event_id: str,
+        name: str = None,
+        description: str = None,
+        date: str = None,
+        sport_type: str = None,
+        planned_duration_seconds: int = None,
+        planned_tss: int = None,
+        category: str = None,
+    ):
+        # PUT /api/v1/athlete/{id}/events/{eventId}
+        payload = {}
+        if name: payload["name"] = name
+        if description: payload["description"] = description
+        if date: payload["start_date_local"] = f"{date}T00:00:00"
+        if sport_type: payload["type"] = sport_type
+        if planned_duration_seconds: payload["moving_time"] = planned_duration_seconds
+        if planned_tss: payload["icu_training_load"] = planned_tss
+        if category: payload["category"] = category
+        return self._put(f"/athlete/{self.athlete_id}/events/{event_id}", payload)
 
     def delete_event(self, event_id: str):
         r = requests.delete(
