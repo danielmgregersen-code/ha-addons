@@ -7,11 +7,20 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_recent_activities",
-            "description": "Fetch the athlete's recent activities/workouts from Intervals.icu. Use this to review training history.",
+            "description": (
+                "Fetch the athlete's recent activities from Intervals.icu. "
+                "Choose days_back based on what is actually needed — use the minimum: "
+                "3-5 for a single recent workout, 7-10 for a weekly review, "
+                "28 for block or load trend analysis. Never fetch more than needed."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "days_back": {"type": "integer", "default": 14}
+                    "days_back": {
+                        "type": "integer",
+                        "description": "How many days back to fetch. Use minimum needed: 3-5 (single workout), 7-10 (weekly), 28 (block/trend). Capped by server config.",
+                        "default": 7,
+                    }
                 },
             },
         },
@@ -253,6 +262,7 @@ Your role:
 
 Guidelines:
 - Always fetch relevant data before commenting — never assume what a workout looks like
+- Fetch only as much history as the question needs — 3-5 days for a single workout, 7-10 for a weekly review, 28 for block or load trend analysis. Default to 7 if unsure
 - Weeks start on Monday (European standard). When referring to "this week" or "last week", Monday is the first day.
 - For interval analysis: fetch activities first to get the ID, then fetch intervals for that activity
 - When analysing intervals, comment on consistency across efforts, power/HR drift, 
@@ -326,6 +336,7 @@ class TrainingAgent:
         group_ride_weekday_tss: int = 60,
         group_ride_weekend_tss: int = 90,
         group_ride_keywords: str = "group,club,fondo,race",
+        days_back: int = 28,
     ):
         self.openai = OpenAI(api_key=openai_api_key)
         self.icu = IntervalsClient(intervals_athlete_id, intervals_api_key)
@@ -339,11 +350,12 @@ class TrainingAgent:
         self.group_ride_weekday_tss = group_ride_weekday_tss
         self.group_ride_weekend_tss = group_ride_weekend_tss
         self.group_ride_keywords = [k.strip() for k in group_ride_keywords.split(",") if k.strip()]
+        self.days_back_cap = days_back
 
     def _run_tool(self, name: str, args: dict) -> str:
         try:
             if name == "get_recent_activities":
-                result = self.icu.get_activities(args.get("days_back", 14), group_keywords=self.group_ride_keywords)
+                result = self.icu.get_activities(args.get("days_back", 7), max_days_back=self.days_back_cap, group_keywords=self.group_ride_keywords)
             elif name == "get_activity_intervals":
                 result = self.icu.get_activity_intervals(args["activity_id"])
             elif name == "get_wellness":
