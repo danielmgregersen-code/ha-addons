@@ -261,6 +261,35 @@ class IntervalsClient:
         if category: payload["category"] = category
         return self._put(f"/athlete/{self.athlete_id}/events/{event_id}", payload)
 
+    def get_weekly_note(self, monday_date: str) -> dict | None:
+        """Fetch the NOTE event on a given Monday (YYYY-MM-DD). Returns None if not found."""
+        events = self._get(
+            f"/athlete/{self.athlete_id}/events",
+            params={"oldest": monday_date, "newest": monday_date},
+        )
+        for e in events:
+            if e.get("category") == "NOTE":
+                return {
+                    "id": e.get("id"),
+                    "date": monday_date,
+                    "name": e.get("name", ""),
+                    "description": e.get("description", ""),
+                }
+        return None
+
+    def write_weekly_note(self, monday_date: str, name: str, content: str, event_id: int = None) -> dict:
+        """Create or update a NOTE event on the given Monday."""
+        payload = {
+            "category": "NOTE",
+            "start_date_local": f"{monday_date}T00:00:00",
+            "name": name,
+            "description": content,
+        }
+        if event_id:
+            return self._put(f"/athlete/{self.athlete_id}/events/{event_id}", payload)
+        else:
+            return self._post(f"/athlete/{self.athlete_id}/events", payload)
+
     def delete_event(self, event_id: str):
         r = requests.delete(
             f"{self.BASE_URL}/athlete/{self.athlete_id}/events/{event_id}",
