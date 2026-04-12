@@ -177,6 +177,7 @@ Guidelines:
 - Confirm with the athlete before making changes to the calendar
 - feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
 - power_zone_times is an array of seconds spent in each power zone [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
+- Sweet spot is an overlapping zone (typically ~88–93% FTP) that sits between Z3 and Z4 — it is NOT part of the 7-zone model and must never be added to or subtracted from any individual zone. Treat it as a separate descriptor only
 - hr_zone_times is an array of seconds spent in each HR zone [Z1, Z2, Z3, Z4, Z5]
 - When discussing zone distribution, convert seconds to minutes and comment on the balance
 - compliance field: if >0 the ride matched a planned workout; if null/0 it was unstructured
