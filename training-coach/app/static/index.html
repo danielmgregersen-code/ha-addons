@@ -227,27 +227,37 @@
     return s;
   }
 
-  // Restore any sessions that exist on the server but not in localStorage.
-  // This recovers history after a browser clear, page reload, or switching devices.
+  // Restore sessions and names from the server after a browser reset or device switch.
   async function syncSessionsFromServer() {
     try {
-      const res = await fetch(`${BASE}/sessions`);
-      if (!res.ok) return;
-      const serverSessions = await res.json();
+      const [sessRes, nameRes] = await Promise.all([
+        fetch(`${BASE}/sessions`),
+        fetch(`${BASE}/session-names`),
+      ]);
+      if (!sessRes.ok) return;
+      const serverSessions = await sessRes.json();
+      const serverNames = nameRes.ok ? await nameRes.json() : {};
       const local = getSessions();
       const localIds = new Set(local.map(s => s.id));
       let changed = false;
+
+      // Restore any sessions missing from localStorage
       for (const [id, meta] of Object.entries(serverSessions)) {
         if (!localIds.has(id) && id !== AUTO_REVIEW_SESSION) {
-          // Server has a session localStorage doesn't know about — restore it
-          // Use last message as name hint if available, otherwise use the ID
-          const name = meta.last_user_message
-            ? meta.last_user_message.slice(0, 30) + (meta.last_user_message.length > 30 ? '…' : '')
-            : id;
+          const name = serverNames[id] || meta.name || id;
           local.splice(local.length - 1, 0, { id, name });
           changed = true;
         }
       }
+
+      // Also update names for existing sessions if server has a newer name
+      for (const s of local) {
+        if (serverNames[s.id] && serverNames[s.id] !== s.name) {
+          s.name = serverNames[s.id];
+          changed = true;
+        }
+      }
+
       if (changed) {
         saveSessions(local);
         renderSidebar();
@@ -296,7 +306,7 @@
       if (val && val !== current) {
         const sessions = getSessions();
         const s = sessions.find(x => x.id === id);
-        if (s) { s.name = val; saveSessions(sessions); }
+        if (s) { s.name = val; saveSessions(sessions); saveSessionNameToServer(id, val); }
       }
       renderSidebar();
     };
@@ -346,8 +356,19 @@
     const s = getSessions();
     s.push({ id, name });
     saveSessions(s);
+    saveSessionNameToServer(id, name);
     document.getElementById('dialog-overlay').classList.remove('open');
     switchSession(id);
+  }
+
+  async function saveSessionNameToServer(id, name) {
+    try {
+      await fetch(`${BASE}/session-names`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, name }),
+      });
+    } catch {}
   }
 
   document.getElementById('clear-btn').addEventListener('click', async () => {
