@@ -52,8 +52,15 @@ class IntervalsClient:
                 "intensity": a.get("icu_intensity"),
                 "rpe": a.get("icu_rpe"),
                 "feel": a.get("feel"),
-                "power_zone_times": a.get("icu_zone_times"),   # seconds per power zone [Z1..Z7]
-                "hr_zone_times": a.get("icu_hr_zone_times"),   # seconds per HR zone [Z1..Z5]
+                "power_zone_times": a.get("icu_zone_times"),       # seconds per power zone [Z1..Z7]
+                "hr_zone_times": a.get("icu_hr_zone_times"),        # seconds per HR zone [Z1..Z5]
+                "decoupling": a.get("decoupling"),                  # aerobic decoupling % (HR drift vs power)
+                "efficiency_factor": a.get("icu_efficiency_factor"), # power / HR ratio
+                "variability_index": a.get("icu_variability_index"), # NP / AP ratio (power smoothness)
+                "power_hr_ratio": a.get("icu_power_hr"),            # avg power / avg HR
+                "polarization_index": a.get("polarization_index"),  # training polarization score
+                "strain_score": a.get("strain_score"),              # overall strain
+                "avg_cadence": a.get("average_cadence"),
                 "description": a.get("description"),
                 "coach_text": a.get("coach_text"),
             })
