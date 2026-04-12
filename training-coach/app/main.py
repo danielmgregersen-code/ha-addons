@@ -10,8 +10,16 @@ from pydantic import BaseModel
 from agent import TrainingAgent
 
 OPTIONS_FILE = "/data/options.json"
-HISTORY_FILE = "/data/chat_history.json"
-NOTIFICATIONS_FILE = "/data/notifications.json"
+
+# Store history and notifications in /config/ so they survive add-on reinstalls.
+# /data/ is wiped on uninstall; /config/ is the persistent HA config directory.
+STORAGE_DIR = "/config/training-coach"
+HISTORY_FILE = f"{STORAGE_DIR}/chat_history.json"
+NOTIFICATIONS_FILE = f"{STORAGE_DIR}/notifications.json"
+SESSION_NAMES_FILE = f"{STORAGE_DIR}/session_names.json"
+
+import pathlib
+pathlib.Path(STORAGE_DIR).mkdir(parents=True, exist_ok=True)
 MAX_HISTORY_MESSAGES = 200
 MAX_NOTIFICATIONS = 100
 POLL_INTERVAL_SECONDS = 120
@@ -71,6 +79,24 @@ def save_notifications(notifs: list):
         print(f"Warning: could not save notifications: {e}", flush=True)
 
 
+def load_session_names() -> dict:
+    if os.path.exists(SESSION_NAMES_FILE):
+        try:
+            with open(SESSION_NAMES_FILE) as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_session_names(names: dict):
+    try:
+        with open(SESSION_NAMES_FILE, "w") as f:
+            json.dump(names, f)
+    except Exception as e:
+        print(f"Warning: could not save session names: {e}", flush=True)
+
+
 def append_to_auto_review_session(sessions: dict, activity_name: str, activity_date: str, comment: str):
     """Add an auto-review comment to the dedicated auto-reviews session."""
     history = sessions.get(AUTO_REVIEW_SESSION, [])
@@ -99,6 +125,7 @@ if not options.get("intervals_api_key"):
 
 sessions: dict[str, list] = load_sessions()
 notifications: list = load_notifications()
+session_names: dict[str, str] = load_session_names()
 
 agent = TrainingAgent(
     openai_api_key=options["openai_api_key"],
@@ -229,15 +256,27 @@ def list_sessions():
                 m for m in hist
                 if isinstance(m, dict) and m.get("role") in ("user", "assistant")
             ]),
-            "last_user_message": next(
-                (m.get("content", "")[:60] for m in reversed(hist)
-                 if isinstance(m, dict) and m.get("role") == "user"
-                 and isinstance(m.get("content"), str)),
-                ""
-            ),
+            "name": session_names.get(sid, sid),
         }
         for sid, hist in sessions.items()
     }
+
+
+@app.get("/session-names")
+def get_session_names():
+    """Return server-side session name mappings."""
+    return session_names
+
+
+@app.post("/session-names")
+def update_session_name(req: dict):
+    """Save a session name to the server."""
+    sid = req.get("id")
+    name = req.get("name")
+    if sid and name:
+        session_names[sid] = name
+        save_session_names(session_names)
+    return {"ok": True}
 
 
 @app.get("/notifications")
