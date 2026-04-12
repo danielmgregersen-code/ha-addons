@@ -29,6 +29,15 @@ class IntervalsClient:
         r.raise_for_status()
         return r.json()
 
+    def get_athlete(self):
+        """Fetch athlete profile including available coach_ticks."""
+        data = self._get(f"/athlete/{self.athlete_id}")
+        return {
+            "id": data.get("id"),
+            "name": data.get("name"),
+            "coach_ticks": data.get("coach_ticks", []),  # list of {id, text}
+        }
+
     def get_activities(self, days_back: int = 14):
         oldest = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
         newest = datetime.now().strftime("%Y-%m-%d")
@@ -36,44 +45,61 @@ class IntervalsClient:
             f"/athlete/{self.athlete_id}/activities",
             params={"oldest": oldest, "newest": newest},
         )
-        simplified = []
+        return [self._simplify_activity(a) for a in activities]
+
+    def get_activities_since(self, since: datetime):
+        """Fetch activities uploaded since a given datetime — used for auto-review polling."""
+        oldest = since.strftime("%Y-%m-%d")
+        newest = datetime.now().strftime("%Y-%m-%d")
+        activities = self._get(
+            f"/athlete/{self.athlete_id}/activities",
+            params={"oldest": oldest, "newest": newest},
+        )
+        # Filter to only activities actually uploaded after since
+        result = []
         for a in activities:
-            simplified.append({
-                "id": a.get("id"),
-                "name": a.get("name"),
-                "type": a.get("type"),
-                "date": a.get("start_date_local", "")[:10],
-                "duration_seconds": a.get("moving_time"),
-                "distance_meters": a.get("distance"),
-                "avg_hr": a.get("average_heartrate"),
-                "max_hr": a.get("max_heartrate"),
-                "avg_power": a.get("average_watts"),
-                "tss": a.get("icu_training_load"),
-                "intensity": a.get("icu_intensity"),
-                "rpe": a.get("icu_rpe"),
-                "feel": a.get("feel"),                  # 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak
-                "power_zone_times": a.get("icu_zone_times"),       # seconds per power zone [Z1..Z7]
-                "hr_zone_times": a.get("icu_hr_zone_times"),        # seconds per HR zone [Z1..Z5]
-                "decoupling": a.get("decoupling"),                  # aerobic decoupling % (HR drift vs power)
-                "efficiency_factor": a.get("icu_efficiency_factor"), # power / HR ratio
-                "variability_index": a.get("icu_variability_index"), # NP / AP ratio (power smoothness)
-                "power_hr_ratio": a.get("icu_power_hr"),            # avg power / avg HR
-                "polarization_index": a.get("polarization_index"),  # training polarization score
-                "strain_score": a.get("strain_score"),              # overall strain
-                "avg_cadence": a.get("average_cadence"),
-                "description": a.get("description"),  # also used for coach comments
-            })
-        return simplified
+            created = a.get("created") or a.get("start_date_local", "")
+            try:
+                # Parse ISO date — activities uploaded after cutoff
+                ts = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                if ts.replace(tzinfo=None) >= since:
+                    result.append(self._simplify_activity(a))
+            except Exception:
+                pass
+        return result
+
+    def _simplify_activity(self, a: dict) -> dict:
+        return {
+            "id": a.get("id"),
+            "name": a.get("name"),
+            "type": a.get("type"),
+            "date": a.get("start_date_local", "")[:10],
+            "duration_seconds": a.get("moving_time"),
+            "distance_meters": a.get("distance"),
+            "avg_hr": a.get("average_heartrate"),
+            "max_hr": a.get("max_heartrate"),
+            "avg_power": a.get("average_watts"),
+            "tss": a.get("icu_training_load"),
+            "intensity": a.get("icu_intensity"),
+            "rpe": a.get("icu_rpe"),
+            "feel": a.get("feel"),                   # 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak
+            "power_zone_times": a.get("icu_zone_times"),        # seconds per power zone [Z1..Z7]
+            "hr_zone_times": a.get("icu_hr_zone_times"),        # seconds per HR zone [Z1..Z5]
+            "decoupling": a.get("decoupling"),
+            "efficiency_factor": a.get("icu_efficiency_factor"),
+            "variability_index": a.get("icu_variability_index"),
+            "power_hr_ratio": a.get("icu_power_hr"),
+            "polarization_index": a.get("polarization_index"),
+            "strain_score": a.get("strain_score"),
+            "avg_cadence": a.get("average_cadence"),
+            "coach_tick": a.get("coach_tick"),       # ID of coach tick if already reviewed
+            "description": a.get("description"),     # coach comment lives here
+        }
 
     def get_activity_detail(self, activity_id: str):
-        """Get full detail of a single activity including all metrics."""
         return self._get(f"/athlete/{self.athlete_id}/activities/{activity_id}")
 
     def get_activity_intervals(self, activity_id: str):
-        """
-        Get individual interval/lap data for a specific activity.
-        Intervals.icu returns icu_intervals (each effort) and icu_groups (repeated sets).
-        """
         try:
             data = self._get(f"/activity/{activity_id}/intervals")
         except Exception as e:
@@ -93,8 +119,8 @@ class IntervalsClient:
         simplified = []
         for iv in raw_intervals:
             simplified.append({
-                "type": iv.get("type"),                       # WORK / RECOVERY
-                "group_id": iv.get("group_id"),               # e.g. "599s@271w87rpm"
+                "type": iv.get("type"),
+                "group_id": iv.get("group_id"),
                 "duration_seconds": iv.get("moving_time"),
                 "distance_meters": round(iv.get("distance") or 0, 1),
                 "avg_power": iv.get("average_watts"),
@@ -148,9 +174,9 @@ class IntervalsClient:
                 "id": e.get("id"),
                 "date": e.get("start_date_local", "")[:10],
                 "name": e.get("name"),
-                "category": e.get("category"),        # WORKOUT, RACE_A, RACE_B, RACE_C, etc.
-                "type": e.get("type"),                 # GravelRide, Ride, Run, Swim, etc.
-                "sub_type": e.get("sub_type"),         # NONE, RACE, WARMUP, COOLDOWN, COMMUTE
+                "category": e.get("category"),
+                "type": e.get("type"),
+                "sub_type": e.get("sub_type"),
                 "description": e.get("description"),
                 "duration_seconds": e.get("moving_time"),
                 "distance_meters": e.get("distance"),
@@ -160,12 +186,16 @@ class IntervalsClient:
             })
         return simplified
 
-    def post_activity_comment(self, activity_id: str, comment: str):
-        # PUT /api/v1/activity/{id} — uses description field (coach_text does not exist in API)
-        return self._put(
-            f"/activity/{activity_id}",
-            {"description": comment},
-        )
+    def post_activity_comment(self, activity_id: str, comment: str, coach_tick_id: int = None):
+        """Post a comment and optionally set a coach tick to mark as reviewed."""
+        payload = {"description": comment}
+        if coach_tick_id is not None:
+            payload["coach_tick"] = coach_tick_id
+        return self._put(f"/activity/{activity_id}", payload)
+
+    def set_coach_tick(self, activity_id: str, coach_tick_id: int):
+        """Mark an activity as coach-reviewed without changing the description."""
+        return self._put(f"/activity/{activity_id}", {"coach_tick": coach_tick_id})
 
     def create_planned_workout(
         self,
@@ -200,7 +230,6 @@ class IntervalsClient:
         planned_tss: int = None,
         category: str = None,
     ):
-        # PUT /api/v1/athlete/{id}/events/{eventId}
         payload = {}
         if name: payload["name"] = name
         if description: payload["description"] = description
