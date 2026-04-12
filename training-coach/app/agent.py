@@ -67,13 +67,29 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_coach_ticks",
+            "description": "Fetch the available coach tick options for this athlete. Call this before posting a comment so you know which tick IDs are available to mark the workout as reviewed.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "post_activity_comment",
-            "description": "Post a coach comment on a completed activity in Intervals.icu. The comment is written to the activity description field.",
+            "description": (
+                "Post a coach comment on a completed activity and mark it as coach-reviewed with a tick. "
+                "Always fetch coach ticks first to pick the most appropriate tick_id. "
+                "The comment is written to the activity description field."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "activity_id": {"type": "string"},
                     "comment": {"type": "string"},
+                    "coach_tick_id": {
+                        "type": "integer",
+                        "description": "ID of the coach tick to set. Fetch available ticks first.",
+                    },
                 },
                 "required": ["activity_id", "comment"],
             },
@@ -102,11 +118,11 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "update_planned_workout",
-            "description": "Update/edit an existing planned workout on the athlete's Intervals.icu calendar. Use this to change the name, description, date, sport type, duration or TSS of a planned workout.",
+            "description": "Update/edit an existing planned workout on the athlete's Intervals.icu calendar.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "event_id": {"type": "string", "description": "The event ID to update."},
+                    "event_id": {"type": "string"},
                     "name": {"type": "string"},
                     "description": {"type": "string"},
                     "date": {"type": "string", "description": "YYYY-MM-DD"},
@@ -145,7 +161,7 @@ Athlete baselines:
 Your role:
 - Analyse recent training and provide honest, specific feedback
 - Drill into individual interval sessions when asked — compare work efforts, check if targets were hit
-- Comment on completed workouts
+- Comment on completed workouts and mark them as coach-reviewed using a coach tick
 - Plan and schedule future workouts based on goals and fatigue
 - Adjust training plans based on athlete requests or wellness data
 
@@ -156,6 +172,10 @@ Guidelines:
 - When analysing intervals, comment on consistency across efforts, power/HR drift, 
   work-to-rest ratio, and whether targets were met
 - Speed is stored as m/s — convert to min/km (pace = 1000/speed/60) or km/h as appropriate
+- When creating planned workouts, write detailed descriptions: warm-up, main set, cool-down with targets
+- Consider cumulative fatigue before adding hard sessions
+- Confirm with the athlete before making changes to the calendar
+- feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
 - power_zone_times is an array of seconds spent in each power zone [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
 - hr_zone_times is an array of seconds spent in each HR zone [Z1, Z2, Z3, Z4, Z5]
 - When discussing zone distribution, convert seconds to minutes and comment on the balance
@@ -163,10 +183,7 @@ Guidelines:
 - efficiency_factor: power/HR ratio — higher is more aerobically efficient; rising over time is a good sign
 - variability_index: normalised power / average power — closer to 1.0 means steady effort, higher means variable pacing
 - polarization_index: distribution between low and high intensity; higher = more polarised training
-- When creating planned workouts, write detailed descriptions: warm-up, main set, cool-down with targets
-- Consider cumulative fatigue before adding hard sessions
-- feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
-- Confirm with the athlete before making changes to the calendar
+- When posting a comment, ALWAYS also fetch coach ticks and set an appropriate coach_tick_id to mark the workout as reviewed
 - Today's date: {today}
 
 Sport types: Ride
@@ -201,8 +218,14 @@ class TrainingAgent:
                 result = self.icu.get_wellness(args.get("days_back", 14))
             elif name == "get_planned_workouts":
                 result = self.icu.get_events(args.get("days_ahead", 21))
+            elif name == "get_coach_ticks":
+                result = self.icu.get_athlete()
             elif name == "post_activity_comment":
-                result = self.icu.post_activity_comment(args["activity_id"], args["comment"])
+                result = self.icu.post_activity_comment(
+                    args["activity_id"],
+                    args["comment"],
+                    coach_tick_id=args.get("coach_tick_id"),
+                )
             elif name == "create_planned_workout":
                 result = self.icu.create_planned_workout(
                     date=args["date"],
@@ -231,29 +254,28 @@ class TrainingAgent:
         except Exception as e:
             return json.dumps({"error": str(e)})
 
-    def chat(self, user_message: str, history: list) -> tuple[str, list]:
+    def _build_system(self) -> str:
         from datetime import date
-
-        if self.hrv_min and self.hrv_max:
-            hrv_context = f"HRV normal range: {self.hrv_min}–{self.hrv_max} ms. Below {self.hrv_min} is suppressed, above {self.hrv_max} is elevated."
-        elif self.hrv_max:
-            hrv_context = f"HRV typical value: ~{self.hrv_max} ms. Use this as baseline when interpreting wellness data."
-        else:
-            hrv_context = "HRV range: not configured."
-
-        if self.rhr_min and self.rhr_max:
-            rhr_context = f"Resting HR normal range: {self.rhr_min}–{self.rhr_max} bpm. Above {self.rhr_max} may indicate fatigue or illness."
-        elif self.rhr_max:
-            rhr_context = f"Resting HR typical value: ~{self.rhr_max} bpm."
-        else:
-            rhr_context = "Resting HR range: not configured."
-
-        system = SYSTEM_PROMPT.format(
+        hrv_context = (
+            f"HRV normal range: {self.hrv_min}–{self.hrv_max} ms. Below {self.hrv_min} is suppressed, above {self.hrv_max} is elevated."
+            if self.hrv_min and self.hrv_max else
+            f"HRV typical value: ~{self.hrv_max} ms." if self.hrv_max else
+            "HRV range: not configured."
+        )
+        rhr_context = (
+            f"Resting HR normal range: {self.rhr_min}–{self.rhr_max} bpm. Above {self.rhr_max} may indicate fatigue or illness."
+            if self.rhr_min and self.rhr_max else
+            f"Resting HR typical value: ~{self.rhr_max} bpm." if self.rhr_max else
+            "Resting HR range: not configured."
+        )
+        return SYSTEM_PROMPT.format(
             today=date.today().isoformat(),
             hrv_context=hrv_context,
             rhr_context=rhr_context,
         )
 
+    def chat(self, user_message: str, history: list) -> tuple[str, list]:
+        system = self._build_system()
         messages = [{"role": "system", "content": system}]
         messages += history
         messages.append({"role": "user", "content": user_message})
@@ -282,3 +304,38 @@ class TrainingAgent:
                 new_history = messages[1:]
                 new_history.append({"role": "assistant", "content": reply})
                 return reply, new_history
+
+    def auto_review(self, activity: dict) -> str:
+        """Generate a short auto-review comment for a newly uploaded activity.
+        Posts the comment + coach tick and returns the comment text."""
+        prompt = (
+            f"A new ride was just uploaded. Write a concise coach review (3-5 sentences). "
+            f"Fetch coach ticks first, then post the comment with an appropriate tick. "
+            f"Activity data: {json.dumps(activity)}"
+        )
+        system = self._build_system()
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ]
+
+        while True:
+            response = self.openai.chat.completions.create(
+                model="gpt-5.4-mini",
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
+            )
+            msg = response.choices[0].message
+            if msg.tool_calls:
+                messages.append(msg)
+                for call in msg.tool_calls:
+                    args = json.loads(call.function.arguments)
+                    result = self._run_tool(call.function.name, args)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": result,
+                    })
+            else:
+                return msg.content
