@@ -59,7 +59,9 @@ class IntervalsClient:
         except Exception as e:
             print(f"Warning: could not create default coach ticks: {e}", flush=True)
 
-    def get_activities(self, days_back: int = 14, group_keywords: list[str] = None):
+    def get_activities(self, days_back: int = 7, max_days_back: int = None, group_keywords: list[str] = None):
+        if max_days_back:
+            days_back = min(days_back, max_days_back)
         oldest = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
         newest = datetime.now().strftime("%Y-%m-%d")
         activities = self._get(
