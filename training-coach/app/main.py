@@ -13,7 +13,7 @@ from agent import TrainingAgent
 OPTIONS_FILE = "/data/options.json"
 HISTORY_FILE = "/data/chat_history.json"
 MAX_HISTORY_MESSAGES = 200
-POLL_INTERVAL_SECONDS = 900  # 15 minutes
+POLL_INTERVAL_SECONDS = 120  # 2 minutes
 
 # Notification queue — stores auto-review notifications for the UI to pick up
 notifications: deque = deque(maxlen=50)
