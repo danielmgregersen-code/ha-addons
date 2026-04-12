@@ -69,6 +69,28 @@
   .notif-dismiss { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0; }
   .notif-dismiss:hover { color: var(--text); }
 
+  /* ── Mobile sidebar toggle ── */
+  #sidebar-toggle {
+    display: none;
+    background: none; border: 1px solid var(--border);
+    color: var(--muted); font-family: 'DM Mono', monospace;
+    font-size: 11px; padding: 5px 10px; border-radius: 6px;
+    cursor: pointer; transition: all 0.15s; white-space: nowrap;
+  }
+  #sidebar-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+  @media (max-width: 600px) {
+    #sidebar-toggle { display: block; }
+    #sidebar {
+      position: absolute; left: 0; top: 0; bottom: 0;
+      z-index: 20; transform: translateX(-100%);
+      transition: transform 0.2s ease;
+      width: 220px;
+    }
+    #sidebar.open { transform: translateX(0); box-shadow: 4px 0 20px rgba(0,0,0,0.4); }
+    .main { position: relative; }
+  }
+
   .session-badge {
     background: var(--accent); color: #0d0f14;
     font-size: 9px; font-weight: 700; padding: 1px 5px;
@@ -162,6 +184,7 @@
   </div>
   <div style="display:flex;align-items:center;gap:10px">
     <div class="status-dot"></div>
+    <button id="sidebar-toggle" onclick="toggleSidebar()">☰ Chats</button>
     <button class="header-btn" id="clear-btn">Clear chat</button>
   </div>
 </header>
@@ -538,12 +561,29 @@
   // Poll every 30 seconds
   setInterval(pollNotifications, 30000);
 
-  // Init
-  const sessions = ensureDefault();
-  renderSidebar();
-  switchSession(sessions[0].id);
-  loadMissedNotifications();
-  syncSessionsFromServer();
+  // Toggle sidebar on mobile
+  function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('open');
+  }
+
+  // Close sidebar when selecting a session on mobile
+  const _origSwitch = switchSession;
+  switchSession = async function(id) {
+    await _origSwitch(id);
+    if (window.innerWidth <= 600) {
+      document.getElementById('sidebar').classList.remove('open');
+    }
+  };
+
+  // Init — await server sync before first render so sessions are always restored
+  (async function init() {
+    ensureDefault();
+    await syncSessionsFromServer();  // restore server sessions first
+    const s = getSessions();
+    renderSidebar();
+    await switchSession(s[0].id);
+    loadMissedNotifications();
+  })();
 </script>
 <div id="notif-banner"></div>
 </body>
