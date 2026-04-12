@@ -1,6 +1,6 @@
 name: "Training Coach"
 description: "AI coaching agent connected to your Intervals.icu training data."
-version: "1.1.9"
+version: "1.0.10"
 slug: "training_coach"
 init: false
 arch:
@@ -30,6 +30,8 @@ options:
   hrv_max: 0
   rhr_min: 0
   rhr_max: 0
+  hard_intervals_per_week: 2
+  block_start_date: ""
 
 schema:
   openai_api_key: str
@@ -41,6 +43,11 @@ schema:
   hrv_max: int
   rhr_min: int
   rhr_max: int
+  hard_intervals_per_week: int
+  block_start_date: str
+
+map:
+  - config:rw
 
 startup: application
 boot: auto
