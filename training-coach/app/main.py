@@ -22,6 +22,10 @@ def load_options() -> dict:
         "intervals_api_key": os.getenv("INTERVALS_API_KEY", ""),
         "days_back": int(os.getenv("DAYS_BACK", "14")),
         "days_ahead": int(os.getenv("DAYS_AHEAD", "21")),
+        "hrv_min": int(os.getenv("HRV_MIN", "0")),
+        "hrv_max": int(os.getenv("HRV_MAX", "0")),
+        "rhr_min": int(os.getenv("RHR_MIN", "0")),
+        "rhr_max": int(os.getenv("RHR_MAX", "0")),
     }
 
 
@@ -63,6 +67,10 @@ agent = TrainingAgent(
     openai_api_key=options["openai_api_key"],
     intervals_athlete_id=options["intervals_athlete_id"],
     intervals_api_key=options["intervals_api_key"],
+    hrv_min=options.get("hrv_min", 0),
+    hrv_max=options.get("hrv_max", 0),
+    rhr_min=options.get("rhr_min", 0),
+    rhr_max=options.get("rhr_max", 0),
 )
 
 
@@ -147,45 +155,5 @@ def list_sessions():
 def health():
     return {"status": "ok"}
 
-@app.get("/debug/activities")
-def debug_activities():
-    """Show raw ID fields from the last 5 activities to find the correct format."""
-    import requests as req
-    from datetime import datetime, timedelta
-    oldest = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-    newest = datetime.now().strftime("%Y-%m-%d")
-    r = req.get(
-        f"https://intervals.icu/api/v1/athlete/{agent.icu.athlete_id}/activities",
-        headers=agent.icu.headers,
-        params={"oldest": oldest, "newest": newest},
-    )
-    activities = r.json()[:5]
-    # Return every field that looks like an ID so we can find the right one
-    return [
-        {k: v for k, v in a.items() if "id" in k.lower() or k in ("name", "type", "start_date_local")}
-        for a in activities
-    ]
-
-
-@app.get("/debug/intervals/{activity_id}")
-def debug_intervals(activity_id: str):
-    """Try the intervals endpoint and return raw response."""
-    import requests as req
-    url = f"https://intervals.icu/api/v1/activity/{activity_id}/intervals"
-    r = req.get(url, headers=agent.icu.headers)
-    return {
-        "status_code": r.status_code,
-        "url": url,
-        "response": r.json() if r.status_code == 200 else r.text[:500],
-    }
-
-@app.get("/debug/test-intervals")
-async def test_intervals():
-    activities = agent.icu.get_activities(days_back=7)
-    if not activities:
-        return {"error": "no activities found"}
-    activity_id = activities[0]["id"]
-    result = agent.icu.get_activity_intervals(activity_id)
-    return {"activity_id": activity_id, "result": result}
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
