@@ -29,14 +29,35 @@ class IntervalsClient:
         r.raise_for_status()
         return r.json()
 
+    DEFAULT_COACH_TICKS = [
+        {"id": 1, "text": "Amazing"},
+        {"id": 2, "text": "Good"},
+        {"id": 3, "text": "Decent"},
+        {"id": 4, "text": "Poor"},
+        {"id": 5, "text": "Really bad"},
+    ]
+
     def get_athlete(self):
-        """Fetch athlete profile including available coach_ticks."""
+        """Fetch athlete profile including available coach_ticks.
+        If no ticks are configured, creates the default set automatically."""
         data = self._get(f"/athlete/{self.athlete_id}")
+        ticks = data.get("coach_ticks", [])
+        if not ticks:
+            self._ensure_default_coach_ticks()
+            ticks = self.DEFAULT_COACH_TICKS
         return {
             "id": data.get("id"),
             "name": data.get("name"),
-            "coach_ticks": data.get("coach_ticks", []),  # list of {id, text}
+            "coach_ticks": ticks,
         }
+
+    def _ensure_default_coach_ticks(self):
+        """Create default coach ticks on the athlete profile if none exist."""
+        try:
+            self._put(f"/athlete/{self.athlete_id}", {"coach_ticks": self.DEFAULT_COACH_TICKS})
+            print("Default coach ticks created.", flush=True)
+        except Exception as e:
+            print(f"Warning: could not create default coach ticks: {e}", flush=True)
 
     def get_activities(self, days_back: int = 14):
         oldest = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
