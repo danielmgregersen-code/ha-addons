@@ -1,130 +1,80 @@
 # Training Coach — Home Assistant Add-on
 
-This add-on runs your Intervals.icu AI coaching agent entirely inside Home Assistant OS.
-No separate processes, no external servers — managed fully from the HA UI.
+An AI-powered cycling coach that lives inside Home Assistant and connects directly to your Intervals.icu training data. Chat with it like a real coach — ask questions, request feedback, plan workouts, and have it automatically review rides as they sync from your device.
 
 ---
 
-## How it works
+## What it does
 
-Once installed, the add-on:
-- Runs a Python backend (FastAPI + GPT-4o agent) as a Docker container inside HA
-- Serves a chat UI accessible from your browser or HA sidebar
-- Reads your API keys from the HA add-on configuration UI
-- Starts automatically when HA boots
+### Conversational coaching
+The coach understands natural language. You don't fill in forms or click buttons — you just talk to it. Ask broad questions like *"How has my training looked this month?"* or specific ones like *"Did I hit my targets on Tuesday's intervals?"* and it will fetch your actual data, analyse it, and respond with real coaching feedback.
 
----
+### Multiple sessions
+The sidebar lets you create named sessions with separate histories — for example one for calendar planning, one for workout feedback, and one for general questions. Sessions are stored on your Raspberry Pi and shared across all devices (phone, tablet, PC) that connect to the same Home Assistant instance. Session names must match across devices to share the same history.
 
-## Installation
+### Automatic workout review
+When a new ride syncs to Intervals.icu, the coach detects it within a few minutes and automatically writes a short review — covering training load, zone distribution, decoupling, key efforts, and recovery recommendations. The review is posted as a description on the activity in Intervals.icu and marked with a coach tick to indicate it has been reviewed.
 
-### Step 1 — Put the files on GitHub
+A notification card appears in the chat UI showing the activity name and a preview of the comment. From the notification you can request a more detailed analysis with one tap, which opens a pre-filled message in your current session. Notifications persist across restarts so you never miss an auto-review, and unseen ones are shown when you next open the app.
 
-HA loads add-ons from a Git repository. You need to host this on GitHub:
+All auto-reviews are also logged chronologically in a dedicated **⚡ Auto-reviews** session, giving you a permanent record of every automated comment the coach has posted.
 
-1. Create a free GitHub account if you don't have one
-2. Create a new repository called `ha-addons` (can be private)
-3. Upload the entire `ha-addon` folder contents to it:
-   - `repository.json` goes in the root
-   - `training-coach/` folder goes in the root
+### Deep interval analysis
+For structured workouts the coach can break down individual intervals — comparing power, heart rate, and cadence across each rep, identifying drift or fatigue within a set, checking whether targets were hit, and commenting on work-to-rest ratios. It uses Intervals.icu's detected interval data, so any ride with structured efforts can be analysed this way.
 
-Your repo should look like:
-```
-ha-addons/
-├── repository.json
-└── training-coach/
-    ├── config.yaml
-    ├── Dockerfile
-    ├── requirements.txt
-    └── app/
-        ├── main.py
-        ├── agent.py
-        ├── intervals.py
-        └── static/
-            └── index.html
-```
+### Calendar management
+The coach can read your upcoming planned workouts and make changes to them on your behalf. You can ask it to add a new session, modify an existing one, reschedule something, or remove a workout entirely. When creating workouts it writes full descriptions including warm-up, main set with power or HR targets, and cool-down, and calculates approximate TSS.
 
-Edit `repository.json` and replace `YOUR_USERNAME` with your GitHub username.
+### Coach ticks
+Whenever the coach posts a comment — whether automatically or when asked — it also sets a coach tick on the activity in Intervals.icu. This marks the workout as reviewed and, if you have coached activity notifications enabled in Intervals.icu, triggers a notification to you as the athlete.
 
-### Step 2 — Add the repository to HA
+### Wellness-aware feedback
+The coach reads your wellness data alongside your training — HRV, resting heart rate, sleep, fatigue, and form scores. When you set your personal HRV and resting HR ranges in the add-on configuration, the coach interprets your daily wellness values in context rather than in isolation. A suppressed HRV or elevated resting HR alongside a heavy training week will factor into its recommendations.
 
-1. In HA, go to **Settings → Add-ons → Add-on Store**
-2. Click the **⋮ menu** (top right) → **Repositories**
-3. Add your repo URL: `https://github.com/YOUR_USERNAME/ha-addons`
-4. Click **Add** → **Close**
-5. Scroll down in the store — you'll see **"Training Coach Add-ons"** section appear
+### Training metrics
+For each activity the coach receives a comprehensive set of metrics including:
+- **Zone times** — seconds spent in each power zone (Z1–Z7) and HR zone (Z1–Z5)
+- **Aerobic decoupling** — HR drift relative to power, indicating aerobic fatigue
+- **Efficiency factor** — power-to-HR ratio, a long-term aerobic fitness indicator
+- **Variability index** — normalised power divided by average power, showing how steady the effort was
+- **RPE and feel** — subjective feedback logged in Intervals.icu (feel scale: 1 = Strong through 5 = Weak)
+- **Polarisation index** — distribution of training stress between low and high intensity
+- **Strain score** — overall session strain
 
-### Step 3 — Install the add-on
-
-1. Click **Training Coach** in the store
-2. Click **Install** (it will build the Docker image — takes 2–3 minutes)
-
-### Step 4 — Configure API keys
-
-1. Go to the add-on's **Configuration** tab
-2. Fill in:
-   ```
-   openai_api_key: sk-...
-   intervals_athlete_id: i12345
-   intervals_api_key: your-key-here
-   days_back: 14
-   days_ahead: 21
-   ```
-3. Click **Save**
-
-**Where to find your Intervals.icu keys:**
-- Log in to intervals.icu
-- Go to **Settings → Developer**
-- Copy your Athlete ID (shown in the URL, like `i12345`) and generate an API key
-
-### Step 5 — Start it
-
-1. Go to the **Info** tab
-2. Toggle **Start on boot** ON
-3. Click **Start**
-4. Check the **Log** tab — you should see `Uvicorn running on http://0.0.0.0:8000`
+### Race calendar awareness
+The coach reads your race calendar including event category (A, B, or C priority) and sport type (Road, Gravel, etc.), so it can factor upcoming races into training load recommendations and taper planning.
 
 ---
 
-## Accessing the chat UI
+## Configuration
 
-Open your browser and go to:
-```
-http://homeassistant.local:8000
-```
+The following settings are entered in the add-on Configuration tab in Home Assistant:
 
-Or from outside your home (if you use Nabu Casa / HA Cloud), you can set up an iFrame panel:
-
-Add to `configuration.yaml`:
-```yaml
-panel_iframe:
-  training_coach:
-    title: "Training Coach"
-    icon: mdi:bike-fast
-    url: "http://homeassistant.local:8000"
-```
-
-Then restart HA and it appears in your sidebar.
+| Setting | Description |
+|---|---|
+| `openai_api_key` | Your OpenAI API key (platform.openai.com) |
+| `intervals_athlete_id` | Your Intervals.icu athlete ID (e.g. `i12345`, visible in the URL) |
+| `intervals_api_key` | Your Intervals.icu API key (Settings → Developer) |
+| `days_back` | How many days of past activities to fetch when asked (default: 14) |
+| `days_ahead` | How many days ahead to fetch planned workouts (default: 21) |
+| `hrv_min` | Lower end of your normal HRV range in ms (0 = not configured) |
+| `hrv_max` | Upper end of your normal HRV range in ms (0 = not configured) |
+| `rhr_min` | Lower end of your normal resting HR range in bpm (0 = not configured) |
+| `rhr_max` | Upper end of your normal resting HR range in bpm (0 = not configured) |
 
 ---
 
-## Updating
+## Data and privacy
 
-1. Push changes to your GitHub repo
-2. In HA, go to the add-on → **Info** tab → **Update** (or uninstall/reinstall)
+All conversation history and notifications are stored locally on your Raspberry Pi in the Home Assistant `/data` directory. Nothing is stored externally except the API calls made to OpenAI (for AI responses) and Intervals.icu (for training data). Your OpenAI API key and Intervals.icu credentials never leave your Home Assistant instance.
+
+OpenAI API usage is pay-per-use. A typical coaching conversation costs a few cents. The auto-review feature generates one API call per new activity.
 
 ---
 
-## Troubleshooting
+## Requirements
 
-**Add-on won't start:**
-Check the Log tab. Common issues:
-- Missing API keys — make sure all three fields are filled in Configuration
-- Port 8000 already in use — check if something else is using it
-
-**"Repository not found" in HA:**
-- Make sure `repository.json` is in the root of your GitHub repo (not inside a subfolder)
-- The repo must be public, or you need to use a personal access token
-
-**API errors in chat:**
-- Verify your OpenAI key is valid and has credit
-- Verify your Intervals.icu athlete ID starts with `i` (e.g. `i12345`)
+- Home Assistant OS or Supervised
+- Raspberry Pi 4 (or any aarch64/amd64 device running HA)
+- An OpenAI API key with access to `gpt-5.4-mini`
+- An Intervals.icu account with API access enabled (free)
