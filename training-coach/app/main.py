@@ -229,6 +229,12 @@ def list_sessions():
                 m for m in hist
                 if isinstance(m, dict) and m.get("role") in ("user", "assistant")
             ]),
+            "last_user_message": next(
+                (m.get("content", "")[:60] for m in reversed(hist)
+                 if isinstance(m, dict) and m.get("role") == "user"
+                 and isinstance(m.get("content"), str)),
+                ""
+            ),
         }
         for sid, hist in sessions.items()
     }
