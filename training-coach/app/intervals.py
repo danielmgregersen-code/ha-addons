@@ -51,7 +51,7 @@ class IntervalsClient:
                 "tss": a.get("icu_training_load"),
                 "intensity": a.get("icu_intensity"),
                 "rpe": a.get("icu_rpe"),
-                "feel": a.get("feel"),
+                "feel": a.get("feel"),                  # 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak
                 "power_zone_times": a.get("icu_zone_times"),       # seconds per power zone [Z1..Z7]
                 "hr_zone_times": a.get("icu_hr_zone_times"),        # seconds per HR zone [Z1..Z5]
                 "decoupling": a.get("decoupling"),                  # aerobic decoupling % (HR drift vs power)
