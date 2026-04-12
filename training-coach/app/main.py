@@ -11,15 +11,12 @@ from agent import TrainingAgent
 
 OPTIONS_FILE = "/data/options.json"
 
-# Store history and notifications in /config/ so they survive add-on reinstalls.
-# /data/ is wiped on uninstall; /config/ is the persistent HA config directory.
-STORAGE_DIR = "/config/training-coach"
+# /data is always persistent for HA add-ons — survives updates and restarts.
+# It is only wiped on a full manual uninstall, not on version updates.
+STORAGE_DIR = "/data"
 HISTORY_FILE = f"{STORAGE_DIR}/chat_history.json"
 NOTIFICATIONS_FILE = f"{STORAGE_DIR}/notifications.json"
 SESSION_NAMES_FILE = f"{STORAGE_DIR}/session_names.json"
-
-import pathlib
-pathlib.Path(STORAGE_DIR).mkdir(parents=True, exist_ok=True)
 MAX_HISTORY_MESSAGES = 200
 MAX_NOTIFICATIONS = 100
 POLL_INTERVAL_SECONDS = 120
