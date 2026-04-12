@@ -233,7 +233,7 @@ Guidelines:
   * After a group ride: check decoupling and RPE — if decoupling >8% or RPE >=8, soften the following day's session
   * In weekly analysis: flag group rides separately, note their contribution to weekly TSS
 - Weekly planning note: always fetch the Monday note before analysing or planning a week. If none exists, write one based on the current block week, planned sessions, and expected TSS. Update it when the week's plan changes
-- When writing a weekly note include: block week and focus, each planned session with day/type/targets/duration, total weekly TSS estimate
+- When writing a weekly note include: block week and focus, each planned session with day/type, total weekly TSS estimate, and any coaching notes to be mindful of
 - feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
 - power_zone_times is an array of seconds spent in each power zone [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
 - Sweet spot is an overlapping zone (typically ~88–93% FTP) that sits between Z3 and Z4 — it is NOT part of the 7-zone model and must never be added to or subtracted from any individual zone. Treat it as a separate descriptor only
