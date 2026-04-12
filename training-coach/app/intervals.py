@@ -267,6 +267,27 @@ class IntervalsClient:
         if category: payload["category"] = category
         return self._put(f"/athlete/{self.athlete_id}/events/{event_id}", payload)
 
+    def get_upcoming_races(self, days_ahead: int = 120) -> list:
+        """Fetch upcoming A-priority race events, sorted by date."""
+        from datetime import datetime, timedelta
+        oldest = datetime.now().strftime("%Y-%m-%d")
+        newest = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+        events = self._get(
+            f"/athlete/{self.athlete_id}/events",
+            params={"oldest": oldest, "newest": newest},
+        )
+        races = []
+        for e in events:
+            if e.get("category") == "RACE_A":
+                races.append({
+                    "id": e.get("id"),
+                    "name": e.get("name"),
+                    "date": e.get("start_date_local", "")[:10],
+                    "type": e.get("type"),
+                    "description": e.get("description"),
+                })
+        return sorted(races, key=lambda r: r["date"])
+
     def get_weekly_note(self, monday_date: str) -> dict | None:
         """Fetch the NOTE event on a given Monday (YYYY-MM-DD). Returns None if not found."""
         events = self._get(
