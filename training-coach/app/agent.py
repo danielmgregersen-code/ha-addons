@@ -101,6 +101,27 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "update_planned_workout",
+            "description": "Update/edit an existing planned workout on the athlete's Intervals.icu calendar. Use this to change the name, description, date, sport type, duration or TSS of a planned workout.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "string", "description": "The event ID to update."},
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "date": {"type": "string", "description": "YYYY-MM-DD"},
+                    "sport_type": {"type": "string"},
+                    "planned_duration_seconds": {"type": "integer"},
+                    "planned_tss": {"type": "integer"},
+                    "category": {"type": "string", "description": "WORKOUT, RACE_A, RACE_B, RACE_C etc."},
+                },
+                "required": ["event_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "delete_planned_workout",
             "description": "Delete a planned workout from the athlete's Intervals.icu calendar.",
             "parameters": {
@@ -166,6 +187,17 @@ class TrainingAgent:
                     planned_duration_seconds=args.get("planned_duration_seconds"),
                     planned_tss=args.get("planned_tss"),
                 )
+            elif name == "update_planned_workout":
+                result = self.icu.update_planned_workout(
+                    event_id=args["event_id"],
+                    name=args.get("name"),
+                    description=args.get("description"),
+                    date=args.get("date"),
+                    sport_type=args.get("sport_type"),
+                    planned_duration_seconds=args.get("planned_duration_seconds"),
+                    planned_tss=args.get("planned_tss"),
+                    category=args.get("category"),
+                )
             elif name == "delete_planned_workout":
                 result = self.icu.delete_event(args["event_id"])
             else:
@@ -184,7 +216,7 @@ class TrainingAgent:
 
         while True:
             response = self.openai.chat.completions.create(
-                model="gpt-5.4-mini",
+                model="gpt-4o-mini",  # NOTE: replace with gpt-4o for better reasoning
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
