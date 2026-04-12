@@ -144,6 +144,7 @@ agent = TrainingAgent(
     group_ride_weekday_tss=options.get("group_ride_weekday_tss", 60),
     group_ride_weekend_tss=options.get("group_ride_weekend_tss", 90),
     group_ride_keywords=options.get("group_ride_keywords", "group,club,fondo,race"),
+    days_back=options.get("days_back", 28),
 )
 
 
