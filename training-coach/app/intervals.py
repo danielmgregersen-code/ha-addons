@@ -59,16 +59,16 @@ class IntervalsClient:
         except Exception as e:
             print(f"Warning: could not create default coach ticks: {e}", flush=True)
 
-    def get_activities(self, days_back: int = 14):
+    def get_activities(self, days_back: int = 14, group_keywords: list[str] = None):
         oldest = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
         newest = datetime.now().strftime("%Y-%m-%d")
         activities = self._get(
             f"/athlete/{self.athlete_id}/activities",
             params={"oldest": oldest, "newest": newest},
         )
-        return [self._simplify_activity(a) for a in activities]
+        return [self._simplify_activity(a, group_keywords) for a in activities]
 
-    def get_activities_since(self, since: datetime):
+    def get_activities_since(self, since: datetime, group_keywords: list[str] = None):
         """Fetch activities uploaded since a given datetime — used for auto-review polling."""
         oldest = since.strftime("%Y-%m-%d")
         newest = datetime.now().strftime("%Y-%m-%d")
@@ -76,20 +76,26 @@ class IntervalsClient:
             f"/athlete/{self.athlete_id}/activities",
             params={"oldest": oldest, "newest": newest},
         )
-        # Filter to only activities actually uploaded after since
         result = []
         for a in activities:
             created = a.get("created") or a.get("start_date_local", "")
             try:
-                # Parse ISO date — activities uploaded after cutoff
                 ts = datetime.fromisoformat(created.replace("Z", "+00:00"))
                 if ts.replace(tzinfo=None) >= since:
-                    result.append(self._simplify_activity(a))
+                    result.append(self._simplify_activity(a, group_keywords))
             except Exception:
                 pass
         return result
 
-    def _simplify_activity(self, a: dict) -> dict:
+    def _is_group_ride(self, a: dict, keywords: list[str]) -> bool:
+        """Detect if an activity is a group ride based on name or tags."""
+        if not keywords:
+            return False
+        name = (a.get("name") or "").lower()
+        tags = [t.lower() for t in (a.get("tags") or [])]
+        return any(kw.lower() in name or kw.lower() in tags for kw in keywords)
+
+    def _simplify_activity(self, a: dict, group_keywords: list[str] = None) -> dict:
         return {
             "id": a.get("id"),
             "name": a.get("name"),
