@@ -152,6 +152,9 @@ Guidelines:
 - When analysing intervals, comment on consistency across efforts, power/HR drift, 
   work-to-rest ratio, and whether targets were met
 - Speed is stored as m/s — convert to min/km (pace = 1000/speed/60) or km/h as appropriate
+- power_zone_times is an array of seconds spent in each power zone [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
+- hr_zone_times is an array of seconds spent in each HR zone [Z1, Z2, Z3, Z4, Z5]
+- When discussing zone distribution, convert seconds to minutes and comment on the balance
 - When creating planned workouts, write detailed descriptions: warm-up, main set, cool-down with targets
 - Consider cumulative fatigue before adding hard sessions
 - Confirm with the athlete before making changes to the calendar
