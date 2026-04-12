@@ -69,6 +69,14 @@
   .notif-dismiss { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0; }
   .notif-dismiss:hover { color: var(--text); }
 
+  .session-badge {
+    background: var(--accent); color: #0d0f14;
+    font-size: 9px; font-weight: 700; padding: 1px 5px;
+    border-radius: 8px; flex-shrink: 0; line-height: 1.4;
+  }
+  .session-item.auto-reviews .session-name { color: var(--accent2); }
+  .session-item.auto-reviews.active .session-name { color: var(--accent2); }
+
   .session-name-input {
     flex: 1; background: var(--surface); border: 1px solid var(--accent);
     border-radius: 4px; padding: 2px 5px; color: var(--accent);
@@ -207,21 +215,41 @@
   function saveSessions(s) { localStorage.setItem('coach_sessions', JSON.stringify(s)); }
   function slugify(n) { return n.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') || 'session'; }
 
+  const AUTO_REVIEW_SESSION = 'auto-reviews';
+
   function ensureDefault() {
     let s = getSessions();
-    if (!s.length) { s = [{ id: 'default', name: 'General' }]; saveSessions(s); }
+    if (!s.length) { s = [{ id: 'default', name: 'General' }]; }
+    // Ensure auto-reviews session always exists
+    if (!s.find(x => x.id === AUTO_REVIEW_SESSION)) {
+      s.push({ id: AUTO_REVIEW_SESSION, name: '⚡ Auto-reviews' });
+    }
+    saveSessions(s);
     return s;
   }
+
+  let unreadAutoReviews = 0;
 
   function renderSidebar() {
     sessionListEl.innerHTML = '';
     getSessions().forEach(s => {
+      const isAuto = s.id === AUTO_REVIEW_SESSION;
       const el = document.createElement('div');
-      el.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
-      el.innerHTML = `<span class="session-name" title="Double-click to rename">${escapeHtml(s.name)}</span><button class="session-delete" title="Delete" data-id="${s.id}">×</button>`;
-      el.addEventListener('click', e => { if (!e.target.classList.contains('session-delete') && !e.target.classList.contains('session-name-input')) switchSession(s.id); });
-      el.querySelector('.session-delete').addEventListener('click', () => deleteSession(s.id));
-      el.querySelector('.session-name').addEventListener('dblclick', e => { e.stopPropagation(); startRename(s.id, el); });
+      el.className = 'session-item' + (s.id === currentSessionId ? ' active' : '') + (isAuto ? ' auto-reviews' : '');
+      const badge = (isAuto && unreadAutoReviews > 0 && s.id !== currentSessionId)
+        ? `<span class="session-badge">${unreadAutoReviews}</span>` : '';
+      const deleteBtn = isAuto ? '' : `<button class="session-delete" title="Delete" data-id="${s.id}">×</button>`;
+      el.innerHTML = `<span class="session-name" title="${isAuto ? '' : 'Double-click to rename'}">${escapeHtml(s.name)}</span>${badge}${deleteBtn}`;
+      el.addEventListener('click', e => {
+        if (!e.target.classList.contains('session-delete') && !e.target.classList.contains('session-name-input')) {
+          if (isAuto) unreadAutoReviews = 0;
+          switchSession(s.id);
+        }
+      });
+      if (!isAuto) {
+        el.querySelector('.session-delete')?.addEventListener('click', () => deleteSession(s.id));
+        el.querySelector('.session-name').addEventListener('dblclick', e => { e.stopPropagation(); startRename(s.id, el); });
+      }
       sessionListEl.appendChild(el);
     });
   }
@@ -415,6 +443,7 @@
   function dismissNotif(id) {
     const card = notifBanner.querySelector(`[data-id="${id}"]`);
     if (card) card.remove();
+    fetch(`${BASE}/notifications/${encodeURIComponent(id)}/seen`, { method: 'POST' }).catch(() => {});
   }
 
   function askMoreDetail(activityId, activityName, notifId) {
@@ -431,7 +460,29 @@
       const data = await res.json();
       if (data.notifications?.length) {
         lastNotifTime = new Date().toISOString();
-        data.notifications.forEach(n => showNotification(n));
+        data.notifications.forEach(n => {
+          showNotification(n);
+          // Bump unread badge if not currently viewing auto-reviews
+          if (currentSessionId !== AUTO_REVIEW_SESSION) {
+            unreadAutoReviews++;
+            renderSidebar();
+          }
+        });
+      }
+    } catch {}
+  }
+
+  // On load, fetch all unseen notifications to restore missed ones
+  async function loadMissedNotifications() {
+    try {
+      const res = await fetch(`${BASE}/notifications`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const unseen = (data.notifications || []).filter(n => !n.seen);
+      unseen.forEach(n => showNotification(n));
+      if (unseen.length && currentSessionId !== AUTO_REVIEW_SESSION) {
+        unreadAutoReviews = unseen.length;
+        renderSidebar();
       }
     } catch {}
   }
@@ -443,6 +494,7 @@
   const sessions = ensureDefault();
   renderSidebar();
   switchSession(sessions[0].id);
+  loadMissedNotifications();
 </script>
 <div id="notif-banner"></div>
 </body>
