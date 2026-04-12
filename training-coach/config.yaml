@@ -33,7 +33,8 @@ options:
   hard_intervals_per_week: 2
   block_start_date: ""
   group_ride_days: ""
-  group_ride_tss_estimate: 80
+  group_ride_weekday_tss: 60
+  group_ride_weekend_tss: 90
   group_ride_keywords: "group,club,fondo,race"
 
 schema:
@@ -49,7 +50,8 @@ schema:
   hard_intervals_per_week: int
   block_start_date: str
   group_ride_days: str
-  group_ride_tss_estimate: int
+  group_ride_weekday_tss: int
+  group_ride_weekend_tss: int
   group_ride_keywords: str
 
 map:
