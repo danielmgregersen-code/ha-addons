@@ -30,11 +30,11 @@ class IntervalsClient:
         return r.json()
 
     DEFAULT_COACH_TICKS = [
-        {"id": 1, "text": "Amazing"},
-        {"id": 2, "text": "Good"},
+        {"id": 1, "text": "Really bad"},
+        {"id": 2, "text": "Poor"},
         {"id": 3, "text": "Decent"},
-        {"id": 4, "text": "Poor"},
-        {"id": 5, "text": "Really bad"},
+        {"id": 4, "text": "Good"},
+        {"id": 5, "text": "Amazing"},
     ]
 
     def get_athlete(self):
