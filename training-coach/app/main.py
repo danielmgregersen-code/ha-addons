@@ -40,6 +40,8 @@ def load_options() -> dict:
         "hrv_max": int(os.getenv("HRV_MAX", "0")),
         "rhr_min": int(os.getenv("RHR_MIN", "0")),
         "rhr_max": int(os.getenv("RHR_MAX", "0")),
+        "hard_intervals_per_week": int(os.getenv("HARD_INTERVALS_PER_WEEK", "2")),
+        "block_start_date": os.getenv("BLOCK_START_DATE", ""),
     }
 
 
@@ -135,6 +137,8 @@ agent = TrainingAgent(
     hrv_max=options.get("hrv_max", 0),
     rhr_min=options.get("rhr_min", 0),
     rhr_max=options.get("rhr_max", 0),
+    hard_intervals_per_week=options.get("hard_intervals_per_week", 2),
+    block_start_date=options.get("block_start_date", ""),
 )
 
 
@@ -305,6 +309,25 @@ def mark_seen(notif_id: str):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/debug/storage")
+def debug_storage():
+    """Diagnose where data is being stored and whether files exist."""
+    import os
+    return {
+        "storage_dir": STORAGE_DIR,
+        "storage_dir_exists": os.path.exists(STORAGE_DIR),
+        "history_file": HISTORY_FILE,
+        "history_file_exists": os.path.exists(HISTORY_FILE),
+        "history_file_size_bytes": os.path.getsize(HISTORY_FILE) if os.path.exists(HISTORY_FILE) else 0,
+        "notifications_file_exists": os.path.exists(NOTIFICATIONS_FILE),
+        "session_names_file_exists": os.path.exists(SESSION_NAMES_FILE),
+        "sessions_in_memory": list(sessions.keys()),
+        "session_names_in_memory": session_names,
+        "config_dir_accessible": os.path.exists("/config"),
+        "config_dir_writable": os.access("/config", os.W_OK),
+    }
 
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
