@@ -279,10 +279,16 @@ class IntervalsClient:
         races = []
         for e in events:
             if e.get("category") == "RACE_A":
+                start = e.get("start_date_local", "")[:10]
+                end = e.get("end_date_local", "")[:10]
+                # Multi-day if end is set and different from start
+                multi_day = bool(end and end != start and end > start)
                 races.append({
                     "id": e.get("id"),
                     "name": e.get("name"),
-                    "date": e.get("start_date_local", "")[:10],
+                    "start_date": start,
+                    "end_date": end if multi_day else start,
+                    "multi_day": multi_day,
                     "type": e.get("type"),
                     "description": e.get("description"),
                 })
