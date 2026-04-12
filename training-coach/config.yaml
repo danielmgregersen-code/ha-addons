@@ -1,6 +1,6 @@
 name: "Training Coach"
 description: "AI coaching agent connected to your Intervals.icu training data."
-version: "1.0.8"
+version: "1.0.9"
 slug: "training_coach"
 init: false
 arch:
@@ -8,7 +8,6 @@ arch:
   - amd64
   - armv7
 
-# Ingress makes the UI appear natively inside HA — no iFrame needed
 ingress: true
 ingress_port: 8000
 ingress_stream: false
@@ -16,7 +15,6 @@ ingress_stream: false
 panel_icon: "mdi:bike-fast"
 panel_title: "Training Coach"
 
-# Keep direct port access as fallback
 ports:
   8000/tcp: 8000
 ports_description:
@@ -28,6 +26,10 @@ options:
   intervals_api_key: ""
   days_back: 14
   days_ahead: 21
+  hrv_min: 0
+  hrv_max: 0
+  rhr_min: 0
+  rhr_max: 0
 
 schema:
   openai_api_key: str
@@ -35,6 +37,10 @@ schema:
   intervals_api_key: str
   days_back: int
   days_ahead: int
+  hrv_min: int
+  hrv_max: int
+  rhr_min: int
+  rhr_max: int
 
 startup: application
 boot: auto
