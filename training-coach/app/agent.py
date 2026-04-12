@@ -138,6 +138,27 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_upcoming_races",
+            "description": (
+                "Fetch upcoming A-priority races from the athlete's Intervals.icu calendar. "
+                "Call this when planning a week or block to check whether a race is approaching "
+                "and determine the correct training phase."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days_ahead": {
+                        "type": "integer",
+                        "description": "How many days ahead to look. Default 120.",
+                        "default": 120,
+                    }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_weekly_note",
             "description": (
                 "Fetch the weekly planning note from Monday of a given week. "
@@ -203,11 +224,21 @@ Hard interval sessions per week: {hard_intervals_per_week}
 Group rides:
 {group_context}
 
-Block structure:
+Block structure (default cycle — overridden when a race is approaching):
 - Week 1 (Foundation): aerobic base, zone 2 focus, {hard_intervals_per_week} light interval sessions (e.g. tempo or sweet spot), moderate TSS
 - Week 2 (Build): increase load ~10%, {hard_intervals_per_week} structured interval sessions (threshold or VO2), higher TSS
 - Week 3 (Peak): highest load of the block, {hard_intervals_per_week} hard interval sessions (VO2max or above threshold), push TSS
 - Week 4 (Recovery): drop volume to ~50-60% of peak week, no hard intervals, zone 1-2 only, let adaptations consolidate
+
+Race-driven phase overrides (check upcoming A races when planning — use get_upcoming_races):
+- Race week (0–6 days out): Activation — very short sharp efforts to stay fast, minimal TSS, no fatigue. Treat as higher priority than any block week
+- Taper (1–3 weeks out): Cut volume 40–60% vs peak week, keep 1–2 short intensity sessions to maintain sharpness, prioritise freshness over load
+- Sharpening (4–5 weeks out): Force a peak/sharpening phase regardless of normal block cycle — highest quality intervals, controlled volume
+- Late build (6–8 weeks out): Ensure you are in a build or peak phase — if the normal cycle would give recovery, extend build by one week instead
+- Normal (>8 weeks out): Follow the standard 1-2-3-4 block cycle
+- Post-race (up to 5 days after): Treat as recovery week regardless of block position
+- Multiple A races: use the nearest one to determine phase; note the next one in the weekly plan
+- Always explain the phase override in the weekly note when a race is driving it
 
 Your role:
 - Analyse recent training and provide honest, specific feedback
@@ -232,7 +263,7 @@ Guidelines:
   * If no group ride days are configured: when planning a week, ask if any group rides are expected and on which days
   * After a group ride: check decoupling and RPE — if decoupling >8% or RPE >=8, soften the following day's session
   * In weekly analysis: flag group rides separately, note their contribution to weekly TSS
-- Weekly planning note: always fetch the Monday note before analysing or planning a week. If none exists, create one. If one already exists, ALWAYS update it by passing its event_id to write_weekly_note — never create a second note on the same Monday
+- Weekly planning note: always fetch the Monday note and check upcoming A races before analysing or planning a week. If no note exists, create one. If one already exists, ALWAYS update it by passing its event_id to write_weekly_note — never create a second note on the same Monday. When a race is within 8 weeks, state the phase override and weeks-to-race in the note
 - When writing a weekly note include: block week and focus (1-2 sentences), each planned session with date/name and a brief natural description of the session type and duration (e.g. "60m Z2 with sprint efforts", "90m easy aerobic", "60m threshold work") — NO specific percentages, NO interval structure details (no "3x15s at 150%", no "warm-up 15m 50-65%"), just the overall character of the session. Finish with expected weekly TSS. Example line: "Tue 21 Apr: Hibernation & Sparks — 60m Z2 with short sprint efforts"
 - feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
 - power_zone_times is an array of seconds spent in each power zone [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
@@ -321,6 +352,8 @@ class TrainingAgent:
                     planned_tss=args.get("planned_tss"),
                     category=args.get("category"),
                 )
+            elif name == "get_upcoming_races":
+                result = self.icu.get_upcoming_races(args.get("days_ahead", 120))
             elif name == "get_weekly_note":
                 result = self.icu.get_weekly_note(args["monday_date"])
                 if result is None:
