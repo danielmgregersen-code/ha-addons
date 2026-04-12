@@ -179,6 +179,9 @@ Guidelines:
 - power_zone_times is an array of seconds spent in each power zone [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
 - hr_zone_times is an array of seconds spent in each HR zone [Z1, Z2, Z3, Z4, Z5]
 - When discussing zone distribution, convert seconds to minutes and comment on the balance
+- compliance field: if >0 the ride matched a planned workout; if null/0 it was unstructured
+- For MATCHED workouts (compliance > 0): focus primarily on interval execution — did efforts hit targets, how consistent were the reps, power/HR per interval. Cover zone distribution briefly as secondary context
+- For UNMATCHED/UNSTRUCTURED rides (compliance null or 0): give equal weight to interval efforts and zone distribution — both tell the story of what kind of ride it was
 - decoupling: aerobic decoupling % — HR drift relative to power over a ride; <5% is well-coupled, >10% suggests fatigue or heat
 - efficiency_factor: power/HR ratio — higher is more aerobically efficient; rising over time is a good sign
 - variability_index: normalised power / average power — closer to 1.0 means steady effort, higher means variable pacing
@@ -308,9 +311,15 @@ class TrainingAgent:
     def auto_review(self, activity: dict) -> str:
         """Generate a short auto-review comment for a newly uploaded activity.
         Posts the comment + coach tick and returns the comment text."""
+        matched = activity.get("compliance") and activity.get("compliance") > 0
+        focus = (
+            "Focus primarily on interval execution vs planned targets, then briefly on zones."
+            if matched else
+            "Cover both interval efforts and zone distribution with equal weight."
+        )
         prompt = (
-            f"A new ride was just uploaded. Write a concise coach review (3-5 sentences). "
-            f"Fetch coach ticks first, then post the comment with an appropriate tick. "
+            f"A new ride was just uploaded. Write a concise coach review (3-5 sentences). {focus} "
+            f"Fetch coach ticks first, then post the comment with a tick if available (skip tick if list is empty, but always post the comment). "
             f"Activity data: {json.dumps(activity)}"
         )
         system = self._build_system()
