@@ -138,6 +138,10 @@ TOOLS = [
 SYSTEM_PROMPT = """You are an expert bicycling coach with direct access 
 to the athlete's training data via Intervals.icu.
 
+Athlete baselines:
+{hrv_context}
+{rhr_context}
+
 Your role:
 - Analyse recent training and provide honest, specific feedback
 - Drill into individual interval sessions when asked — compare work efforts, check if targets were hit
@@ -170,9 +174,22 @@ Sport types: Ride
 
 
 class TrainingAgent:
-    def __init__(self, openai_api_key: str, intervals_athlete_id: str, intervals_api_key: str):
+    def __init__(
+        self,
+        openai_api_key: str,
+        intervals_athlete_id: str,
+        intervals_api_key: str,
+        hrv_min: int = 0,
+        hrv_max: int = 0,
+        rhr_min: int = 0,
+        rhr_max: int = 0,
+    ):
         self.openai = OpenAI(api_key=openai_api_key)
         self.icu = IntervalsClient(intervals_athlete_id, intervals_api_key)
+        self.hrv_min = hrv_min
+        self.hrv_max = hrv_max
+        self.rhr_min = rhr_min
+        self.rhr_max = rhr_max
 
     def _run_tool(self, name: str, args: dict) -> str:
         try:
@@ -216,7 +233,26 @@ class TrainingAgent:
 
     def chat(self, user_message: str, history: list) -> tuple[str, list]:
         from datetime import date
-        system = SYSTEM_PROMPT.format(today=date.today().isoformat())
+
+        if self.hrv_min and self.hrv_max:
+            hrv_context = f"HRV normal range: {self.hrv_min}–{self.hrv_max} ms. Below {self.hrv_min} is suppressed, above {self.hrv_max} is elevated."
+        elif self.hrv_max:
+            hrv_context = f"HRV typical value: ~{self.hrv_max} ms. Use this as baseline when interpreting wellness data."
+        else:
+            hrv_context = "HRV range: not configured."
+
+        if self.rhr_min and self.rhr_max:
+            rhr_context = f"Resting HR normal range: {self.rhr_min}–{self.rhr_max} bpm. Above {self.rhr_max} may indicate fatigue or illness."
+        elif self.rhr_max:
+            rhr_context = f"Resting HR typical value: ~{self.rhr_max} bpm."
+        else:
+            rhr_context = "Resting HR range: not configured."
+
+        system = SYSTEM_PROMPT.format(
+            today=date.today().isoformat(),
+            hrv_context=hrv_context,
+            rhr_context=rhr_context,
+        )
 
         messages = [{"role": "system", "content": system}]
         messages += history
