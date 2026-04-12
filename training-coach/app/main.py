@@ -42,6 +42,10 @@ def load_options() -> dict:
         "rhr_max": int(os.getenv("RHR_MAX", "0")),
         "hard_intervals_per_week": int(os.getenv("HARD_INTERVALS_PER_WEEK", "2")),
         "block_start_date": os.getenv("BLOCK_START_DATE", ""),
+        "group_ride_days": os.getenv("GROUP_RIDE_DAYS", ""),
+        "group_ride_weekday_tss": int(os.getenv("GROUP_RIDE_WEEKDAY_TSS", "60")),
+        "group_ride_weekend_tss": int(os.getenv("GROUP_RIDE_WEEKEND_TSS", "90")),
+        "group_ride_keywords": os.getenv("GROUP_RIDE_KEYWORDS", "group,club,fondo,race"),
     }
 
 
@@ -139,6 +143,10 @@ agent = TrainingAgent(
     rhr_max=options.get("rhr_max", 0),
     hard_intervals_per_week=options.get("hard_intervals_per_week", 2),
     block_start_date=options.get("block_start_date", ""),
+    group_ride_days=options.get("group_ride_days", ""),
+    group_ride_weekday_tss=options.get("group_ride_weekday_tss", 60),
+    group_ride_weekend_tss=options.get("group_ride_weekend_tss", 90),
+    group_ride_keywords=options.get("group_ride_keywords", "group,club,fondo,race"),
 )
 
 
