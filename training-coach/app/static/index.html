@@ -45,6 +45,30 @@
   .session-item:hover .session-delete { opacity: 1; }
   .session-delete:hover { color: #f06060; }
   .sidebar-hint { padding: 10px 12px; font-size: 10px; color: var(--muted); line-height: 1.5; border-top: 1px solid var(--border); }
+  /* ── Notifications ── */
+  #notif-banner {
+    position: fixed; bottom: 80px; right: 16px;
+    display: flex; flex-direction: column; gap: 8px;
+    z-index: 50; max-width: 340px;
+  }
+  .notif-card {
+    background: var(--surface); border: 1px solid var(--accent);
+    border-radius: var(--radius); padding: 12px 14px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    animation: slideIn 0.25s ease;
+  }
+  @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .notif-header { font-size: 10px; color: var(--accent); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+  .notif-title { font-size: 12px; color: var(--text); font-weight: 500; margin-bottom: 4px; }
+  .notif-preview { font-size: 11px; color: var(--muted); line-height: 1.5; margin-bottom: 8px; }
+  .notif-btns { display: flex; gap: 6px; }
+  .notif-btn { font-family: 'DM Mono', monospace; font-size: 11px; padding: 4px 10px; border-radius: 5px; cursor: pointer; border: 1px solid var(--border); background: none; color: var(--muted); transition: all 0.15s; }
+  .notif-btn.primary { background: var(--accent); border-color: var(--accent); color: #0d0f14; }
+  .notif-btn:hover { border-color: var(--text); color: var(--text); }
+  .notif-btn.primary:hover { opacity: 0.85; }
+  .notif-dismiss { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0; }
+  .notif-dismiss:hover { color: var(--text); }
+
   .session-name-input {
     flex: 1; background: var(--surface); border: 1px solid var(--accent);
     border-radius: 4px; padding: 2px 5px; color: var(--accent);
@@ -362,10 +386,64 @@
     finally { busy = false; sendBtn.disabled = false; inputEl.focus(); messagesEl.scrollTop = messagesEl.scrollHeight; }
   }
 
+  // ── Notifications ──
+  let lastNotifTime = new Date().toISOString();
+  const notifBanner = document.getElementById('notif-banner');
+
+  function showNotification(notif) {
+    const preview = notif.comment.length > 120 ? notif.comment.slice(0, 120) + '…' : notif.comment;
+    const card = document.createElement('div');
+    card.className = 'notif-card';
+    card.dataset.id = notif.id;
+    card.innerHTML = `
+      <div class="notif-header">
+        <span>⚡ Auto-review — ${notif.activity_date}</span>
+        <button class="notif-dismiss" onclick="dismissNotif('${notif.id}')">×</button>
+      </div>
+      <div class="notif-title">${escapeHtml(notif.activity_name)}</div>
+      <div class="notif-preview">${escapeHtml(preview)}</div>
+      <div class="notif-btns">
+        <button class="notif-btn primary" onclick="askMoreDetail('${notif.activity_id}', '${notif.activity_name.replace(/'/g, "\\'")}', '${notif.id}')">More detail</button>
+        <button class="notif-btn" onclick="dismissNotif('${notif.id}')">Dismiss</button>
+      </div>
+    `;
+    notifBanner.appendChild(card);
+    // Auto-dismiss after 60 seconds
+    setTimeout(() => dismissNotif(notif.id), 60000);
+  }
+
+  function dismissNotif(id) {
+    const card = notifBanner.querySelector(`[data-id="${id}"]`);
+    if (card) card.remove();
+  }
+
+  function askMoreDetail(activityId, activityName, notifId) {
+    dismissNotif(notifId);
+    const msg = `Please give me a more detailed analysis of the ride "${activityName}" (ID: ${activityId})`;
+    inputEl.value = msg;
+    send();
+  }
+
+  async function pollNotifications() {
+    try {
+      const res = await fetch(`${BASE}/notifications?since=${encodeURIComponent(lastNotifTime)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.notifications?.length) {
+        lastNotifTime = new Date().toISOString();
+        data.notifications.forEach(n => showNotification(n));
+      }
+    } catch {}
+  }
+
+  // Poll every 30 seconds
+  setInterval(pollNotifications, 30000);
+
   // Init
   const sessions = ensureDefault();
   renderSidebar();
   switchSession(sessions[0].id);
 </script>
+<div id="notif-banner"></div>
 </body>
 </html>
