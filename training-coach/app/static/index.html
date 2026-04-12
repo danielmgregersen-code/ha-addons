@@ -220,12 +220,39 @@
   function ensureDefault() {
     let s = getSessions();
     if (!s.length) { s = [{ id: 'default', name: 'General' }]; }
-    // Ensure auto-reviews session always exists
     if (!s.find(x => x.id === AUTO_REVIEW_SESSION)) {
       s.push({ id: AUTO_REVIEW_SESSION, name: '⚡ Auto-reviews' });
     }
     saveSessions(s);
     return s;
+  }
+
+  // Restore any sessions that exist on the server but not in localStorage.
+  // This recovers history after a browser clear, page reload, or switching devices.
+  async function syncSessionsFromServer() {
+    try {
+      const res = await fetch(`${BASE}/sessions`);
+      if (!res.ok) return;
+      const serverSessions = await res.json();
+      const local = getSessions();
+      const localIds = new Set(local.map(s => s.id));
+      let changed = false;
+      for (const [id, meta] of Object.entries(serverSessions)) {
+        if (!localIds.has(id) && id !== AUTO_REVIEW_SESSION) {
+          // Server has a session localStorage doesn't know about — restore it
+          // Use last message as name hint if available, otherwise use the ID
+          const name = meta.last_user_message
+            ? meta.last_user_message.slice(0, 30) + (meta.last_user_message.length > 30 ? '…' : '')
+            : id;
+          local.splice(local.length - 1, 0, { id, name });
+          changed = true;
+        }
+      }
+      if (changed) {
+        saveSessions(local);
+        renderSidebar();
+      }
+    } catch {}
   }
 
   let unreadAutoReviews = 0;
@@ -495,6 +522,7 @@
   renderSidebar();
   switchSession(sessions[0].id);
   loadMissedNotifications();
+  syncSessionsFromServer();
 </script>
 <div id="notif-banner"></div>
 </body>
