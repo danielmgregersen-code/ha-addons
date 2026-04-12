@@ -155,6 +155,10 @@ Guidelines:
 - power_zone_times is an array of seconds spent in each power zone [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
 - hr_zone_times is an array of seconds spent in each HR zone [Z1, Z2, Z3, Z4, Z5]
 - When discussing zone distribution, convert seconds to minutes and comment on the balance
+- decoupling: aerobic decoupling % — HR drift relative to power over a ride; <5% is well-coupled, >10% suggests fatigue or heat
+- efficiency_factor: power/HR ratio — higher is more aerobically efficient; rising over time is a good sign
+- variability_index: normalised power / average power — closer to 1.0 means steady effort, higher means variable pacing
+- polarization_index: distribution between low and high intensity; higher = more polarised training
 - When creating planned workouts, write detailed descriptions: warm-up, main set, cool-down with targets
 - Consider cumulative fatigue before adding hard sessions
 - Confirm with the athlete before making changes to the calendar
