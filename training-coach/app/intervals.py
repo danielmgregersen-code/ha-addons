@@ -292,7 +292,7 @@ class IntervalsClient:
                     "type": e.get("type"),
                     "description": e.get("description"),
                 })
-        return sorted(races, key=lambda r: r["date"])
+        return sorted(races, key=lambda r: r["start_date"])
 
     def get_weekly_note(self, monday_date: str) -> dict | None:
         """Fetch the NOTE event on a given Monday (YYYY-MM-DD). Returns None if not found."""
