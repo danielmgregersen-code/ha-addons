@@ -161,6 +161,7 @@ Guidelines:
 - polarization_index: distribution between low and high intensity; higher = more polarised training
 - When creating planned workouts, write detailed descriptions: warm-up, main set, cool-down with targets
 - Consider cumulative fatigue before adding hard sessions
+- feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
 - Confirm with the athlete before making changes to the calendar
 - Today's date: {today}
 
