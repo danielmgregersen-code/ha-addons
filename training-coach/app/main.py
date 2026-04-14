@@ -43,6 +43,7 @@ def load_options() -> dict:
         "group_ride_weekday_tss": int(os.getenv("GROUP_RIDE_WEEKDAY_TSS", "60")),
         "group_ride_weekend_tss": int(os.getenv("GROUP_RIDE_WEEKEND_TSS", "90")),
         "group_ride_keywords": os.getenv("GROUP_RIDE_KEYWORDS", "group,club,fondo,race"),
+        "group_ride_counts_as_intervals": os.getenv("GROUP_RIDE_COUNTS_AS_INTERVALS", ""),
     }
 
 
@@ -144,6 +145,7 @@ agent = TrainingAgent(
     group_ride_weekday_tss=options.get("group_ride_weekday_tss", 60),
     group_ride_weekend_tss=options.get("group_ride_weekend_tss", 90),
     group_ride_keywords=options.get("group_ride_keywords", "group,club,fondo,race"),
+    group_ride_counts_as_intervals=options.get("group_ride_counts_as_intervals", ""),
     days_back=options.get("days_back", 28),
 )
 
