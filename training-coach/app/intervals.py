@@ -97,6 +97,10 @@ class IntervalsClient:
         tags = [t.lower() for t in (a.get("tags") or [])]
         return any(kw.lower() in name or kw.lower() in tags for kw in keywords)
 
+    @staticmethod
+    def _strip_nulls(d: dict) -> dict:
+        return {k: v for k, v in d.items() if v is not None}
+
     def _simplify_activity(self, a: dict, group_keywords: list[str] = None) -> dict:
         return {
             "id": a.get("id"),
