@@ -338,10 +338,9 @@ class TrainingAgent:
         hard_intervals_per_week: int = 2,
         block_start_date: str = "",
         group_ride_days: str = "",
-        group_ride_weekday_tss: int = 60,
-        group_ride_weekend_tss: int = 90,
-        group_ride_keywords: str = "group,club,fondo,race",
-        group_ride_counts_as_intervals: str = "",
+        group_ride_weekday_tss: int = 120,
+        group_ride_weekend_tss: int = 180,
+        group_ride_keywords: str = "group,club",
         group_ride_counts_as_intervals: str = "",
         days_back: int = 28,
     ):
@@ -357,7 +356,6 @@ class TrainingAgent:
         self.group_ride_weekday_tss = group_ride_weekday_tss
         self.group_ride_weekend_tss = group_ride_weekend_tss
         self.group_ride_keywords = [k.strip() for k in group_ride_keywords.split(",") if k.strip()]
-        self.group_ride_counts_as_intervals = [d.strip() for d in group_ride_counts_as_intervals.split(",") if d.strip()]
         self.group_ride_counts_as_intervals = [d.strip() for d in group_ride_counts_as_intervals.split(",") if d.strip()]
         self.days_back_cap = days_back
 
