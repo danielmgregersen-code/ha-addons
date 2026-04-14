@@ -342,6 +342,7 @@ class TrainingAgent:
         group_ride_weekend_tss: int = 90,
         group_ride_keywords: str = "group,club,fondo,race",
         group_ride_counts_as_intervals: str = "",
+        group_ride_counts_as_intervals: str = "",
         days_back: int = 28,
     ):
         self.openai = OpenAI(api_key=openai_api_key)
@@ -356,6 +357,7 @@ class TrainingAgent:
         self.group_ride_weekday_tss = group_ride_weekday_tss
         self.group_ride_weekend_tss = group_ride_weekend_tss
         self.group_ride_keywords = [k.strip() for k in group_ride_keywords.split(",") if k.strip()]
+        self.group_ride_counts_as_intervals = [d.strip() for d in group_ride_counts_as_intervals.split(",") if d.strip()]
         self.group_ride_counts_as_intervals = [d.strip() for d in group_ride_counts_as_intervals.split(",") if d.strip()]
         self.days_back_cap = days_back
 
@@ -479,6 +481,12 @@ class TrainingAgent:
         kw_str = ", ".join(self.group_ride_keywords) if self.group_ride_keywords else "none"
         group_context += f" Auto-detection keywords: {kw_str}."
         if self.group_ride_counts_as_intervals:
+            ci_str = ", ".join(self.group_ride_counts_as_intervals)
+            group_context += (f" Group rides on {ci_str} count as one of the {self.hard_intervals_per_week} "
+                              f"hard interval sessions for the week — reduce planned structured hard sessions by 1 on weeks containing a group ride on these days.")
+        else:
+            group_context += " Group rides do not count toward the hard interval quota."
+        if self.group_ride_counts_as_intervals:
             interval_days = ", ".join(self.group_ride_counts_as_intervals)
             group_context += (f" The following group ride days count toward the {self.hard_intervals_per_week} hard interval sessions per week: {interval_days}. "
                               f"Do not schedule an additional hard interval session on these days or to compensate for them.")
@@ -496,9 +504,13 @@ class TrainingAgent:
 
     def chat(self, user_message: str, history: list) -> tuple[str, list]:
         system = self._build_system()
-        # Send only the last 10 history messages to limit input tokens
-        # Full history is stored server-side — start a new session for long planning tasks
-        trimmed_history = history[-10:] if len(history) > 10 else history
+        # Trim history to last 10 messages but always start on a user message
+        # to avoid orphaned tool/tool_calls pairs that cause API errors
+        trimmed = history[-10:] if len(history) > 10 else history
+        # Walk forward until we find a user message to start from
+        while trimmed and trimmed[0].get("role") != "user":
+            trimmed = trimmed[1:]
+        trimmed_history = trimmed if trimmed else history[-2:]
         messages = [{"role": "system", "content": system}]
         messages += trimmed_history
         messages.append({"role": "user", "content": user_message})
