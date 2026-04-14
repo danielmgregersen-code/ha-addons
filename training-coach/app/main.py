@@ -1,6 +1,7 @@
 import json
 import os
 import asyncio
+import threading
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
@@ -131,6 +132,11 @@ sessions: dict[str, list] = load_sessions()
 notifications: list = load_notifications()
 session_names: dict[str, str] = load_session_names()
 
+# Thread locks for concurrent request safety
+sessions_lock = threading.RLock()
+notifications_lock = threading.RLock()
+session_names_lock = threading.RLock()
+
 agent = TrainingAgent(
     openai_api_key=options["openai_api_key"],
     intervals_athlete_id=options["intervals_athlete_id"],
@@ -178,18 +184,20 @@ async def auto_review_loop():
                     "seen": False,
                 }
 
-                # Store in persistent notifications
-                notifications.append(notif)
-                save_notifications(notifications)
+                # Store in persistent notifications with lock
+                with notifications_lock:
+                    notifications.append(notif)
+                    save_notifications(notifications)
 
-                # Log to auto-reviews session
-                append_to_auto_review_session(
-                    sessions,
-                    activity.get("name", "Unnamed activity"),
-                    activity.get("date", ""),
-                    comment,
-                )
-                save_sessions(sessions)
+                # Log to auto-reviews session with lock
+                with sessions_lock:
+                    append_to_auto_review_session(
+                        sessions,
+                        activity.get("name", "Unnamed activity"),
+                        activity.get("date", ""),
+                        comment,
+                    )
+                    save_sessions(sessions)
 
                 print(f"Auto-review done for {activity.get('id')}", flush=True)
         except Exception as e:
@@ -230,13 +238,15 @@ async def root(request: Request):
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    history = sessions.get(req.session_id, [])
+    with sessions_lock:
+        history = sessions.get(req.session_id, [])
     try:
         reply, updated_history = agent.chat(req.message, history)
         if len(updated_history) > MAX_HISTORY_MESSAGES:
             updated_history = updated_history[-MAX_HISTORY_MESSAGES:]
-        sessions[req.session_id] = updated_history
-        save_sessions(sessions)
+        with sessions_lock:
+            sessions[req.session_id] = updated_history
+            save_sessions(sessions)
         return ChatResponse(reply=reply)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -255,8 +265,9 @@ def get_history(session_id: str):
 
 @app.delete("/chat/{session_id}")
 def clear_session(session_id: str):
-    sessions.pop(session_id, None)
-    save_sessions(sessions)
+    with sessions_lock:
+        sessions.pop(session_id, None)
+        save_sessions(sessions)
     return {"cleared": session_id}
 
 
@@ -277,7 +288,8 @@ def list_sessions():
 @app.get("/session-names")
 def get_session_names():
     """Return server-side session name mappings."""
-    return session_names
+    with session_names_lock:
+        return dict(session_names)
 
 
 @app.post("/session-names")
@@ -286,8 +298,9 @@ def update_session_name(req: dict):
     sid = req.get("id")
     name = req.get("name")
     if sid and name:
-        session_names[sid] = name
-        save_session_names(session_names)
+        with session_names_lock:
+            session_names[sid] = name
+            save_session_names(session_names)
     return {"ok": True}
 
 
@@ -307,10 +320,11 @@ def get_notifications(since: str = None):
 @app.post("/notifications/{notif_id}/seen")
 def mark_seen(notif_id: str):
     """Mark a notification as seen."""
-    for n in notifications:
-        if n["id"] == notif_id:
-            n["seen"] = True
-    save_notifications(notifications)
+    with notifications_lock:
+        for n in notifications:
+            if n["id"] == notif_id:
+                n["seen"] = True
+        save_notifications(notifications)
     return {"ok": True}
 
 

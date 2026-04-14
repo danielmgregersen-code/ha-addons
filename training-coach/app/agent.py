@@ -513,7 +513,8 @@ class TrainingAgent:
         messages += trimmed_history
         messages.append({"role": "user", "content": user_message})
 
-        while True:
+        max_iterations = 15
+        for iteration in range(max_iterations):
             response = self.openai.chat.completions.create(
                 model="gpt-5.4",  # Full model for interactive chat — better reasoning and planning
                 messages=messages,
@@ -525,7 +526,16 @@ class TrainingAgent:
             if msg.tool_calls:
                 messages.append(msg)
                 for call in msg.tool_calls:
-                    args = json.loads(call.function.arguments)
+                    try:
+                        args = json.loads(call.function.arguments)
+                    except json.JSONDecodeError as e:
+                        # LLM returned invalid JSON; ask it to retry
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "content": f"Error parsing tool arguments: {e}. Please retry with valid JSON.",
+                        })
+                        continue
                     result = self._run_tool(call.function.name, args)
                     messages.append({
                         "role": "tool",
@@ -537,6 +547,9 @@ class TrainingAgent:
                 new_history = messages[1:]
                 new_history.append({"role": "assistant", "content": reply})
                 return reply, new_history
+
+        # Max iterations reached without final response
+        raise RuntimeError(f"Tool loop exceeded max iterations ({max_iterations}). LLM may be stuck in a loop.")
 
     def auto_review(self, activity: dict) -> str:
         """Generate a short auto-review comment for a newly uploaded activity.
@@ -558,7 +571,8 @@ class TrainingAgent:
             {"role": "user", "content": prompt},
         ]
 
-        while True:
+        max_iterations = 15
+        for iteration in range(max_iterations):
             response = self.openai.chat.completions.create(
                 model="gpt-5.4-mini",  # Mini for auto-review — high volume, straightforward task
                 messages=messages,
@@ -569,7 +583,16 @@ class TrainingAgent:
             if msg.tool_calls:
                 messages.append(msg)
                 for call in msg.tool_calls:
-                    args = json.loads(call.function.arguments)
+                    try:
+                        args = json.loads(call.function.arguments)
+                    except json.JSONDecodeError as e:
+                        # LLM returned invalid JSON; ask it to retry
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "content": f"Error parsing tool arguments: {e}. Please retry with valid JSON.",
+                        })
+                        continue
                     result = self._run_tool(call.function.name, args)
                     messages.append({
                         "role": "tool",
@@ -578,3 +601,6 @@ class TrainingAgent:
                     })
             else:
                 return msg.content
+
+        # Max iterations reached without final response
+        raise RuntimeError(f"Auto-review tool loop exceeded max iterations ({max_iterations}). LLM may be stuck.")
