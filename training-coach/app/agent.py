@@ -502,7 +502,7 @@ class TrainingAgent:
 
         while True:
             response = self.openai.chat.completions.create(
-                model="gpt-5.4-mini",
+                model="gpt-5.4",  # Full model for interactive chat — better reasoning and planning
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
@@ -547,7 +547,7 @@ class TrainingAgent:
 
         while True:
             response = self.openai.chat.completions.create(
-                model="gpt-5.4-mini",
+                model="gpt-5.4-mini",  # Mini for auto-review — high volume, straightforward task
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
