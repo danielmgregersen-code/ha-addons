@@ -496,8 +496,11 @@ class TrainingAgent:
 
     def chat(self, user_message: str, history: list) -> tuple[str, list]:
         system = self._build_system()
+        # Send only the last 10 history messages to limit input tokens
+        # Full history is stored server-side — start a new session for long planning tasks
+        trimmed_history = history[-10:] if len(history) > 10 else history
         messages = [{"role": "system", "content": system}]
-        messages += history
+        messages += trimmed_history
         messages.append({"role": "user", "content": user_message})
 
         while True:
