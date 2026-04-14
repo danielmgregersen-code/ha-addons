@@ -271,7 +271,7 @@ Guidelines:
 - When creating planned workouts, the description MUST use the Intervals.icu workout builder format so it renders as a structured workout with a visual bar graph and calculated TSS. The format is:
 
 Section headers are plain text lines (no dash). Steps start with a dash and include duration and target.
-Repeats are written as "Nx" on the line before the repeated steps.
+Repeats are written as "Nx" on the line IMMEDIATELY before the indented repeated steps — the steps in the repeat block must each start with "- " and the whole block is indented or simply follows the Nx line directly. Each repeat step must be on its own line. The recovery between efforts is a step inside the repeat block, not outside it. When a session has multiple distinct sets with longer rest between them, write each set as its own separate Nx block with the inter-set rest as a plain step between the blocks — never nest repeat blocks inside each other.
 
 Duration formats: 30s, 10m, 1m30
 Targets: 100w (absolute watts), 80% (% of FTP), 60% HR (% of max HR), 100% LTHR, 90 rpm (cadence)
@@ -281,14 +281,19 @@ Zones: Z1, Z2, Z3, Z4, Z5, Z6, Z7 (power) or Z1 HR, Z2 HR etc.
 
 Example:
 Warmup
-- 15m Z2 90-100rpm
+- 15m 55-65%
 
 Main set 4x
 - 8m 95-105%
-- 4m Z1
+- 4m 40-50%
 
 Cooldown
-- 10m Z2
+- 10m 55-65%
+
+For sweet spot work, use 88-93% rather than a zone label:
+Main set 3x
+- 12m 88-93%
+- 5m 50-60%
 
 Always structure workouts with Warmup / Main set / Cooldown sections. Use raw percentages or watt values rather than zone notation — fixed values (e.g. 75%, 250w) or ranges (e.g. 70-80%, 240-260w) are both fine. Include cadence guidance for key efforts
 - Consider cumulative fatigue before adding hard sessions
@@ -303,7 +308,7 @@ Always structure workouts with Warmup / Main set / Cooldown sections. Use raw pe
 - When writing a weekly note include: block week and focus (1-2 sentences), each planned session with date/name and a brief natural description of the session type and duration (e.g. "60m Z2 with sprint efforts", "90m easy aerobic", "60m threshold work") — NO specific percentages, NO interval structure details (no "3x15s at 150%", no "warm-up 15m 50-65%"), just the overall character of the session. Finish with expected weekly TSS. Example line: "Tue 21 Apr: Hibernation & Sparks — 60m Z2 with short sprint efforts"
 - feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
 - power_zone_times is an array of seconds spent in each power zone [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
-- Sweet spot is an overlapping zone (typically ~88–93% FTP) that sits between Z3 and Z4 — it is NOT part of the 7-zone model and must never be added to or subtracted from any individual zone. Treat it as a separate descriptor only
+- Sweet spot (~88–93% FTP) overlaps the upper portion of Z3 and lower portion of Z4 — it is NOT a separate zone in the 7-zone model. When reporting zone times, sweet spot time is already counted within Z3 and Z4. Never list it as its own zone or add it on top of Z3/Z4 totals
 - hr_zone_times is an array of seconds spent in each HR zone [Z1, Z2, Z3, Z4, Z5]
 - When discussing zone distribution, convert seconds to minutes and comment on the balance
 - compliance field: if >0 the ride matched a planned workout; if null/0 it was unstructured
@@ -336,6 +341,7 @@ class TrainingAgent:
         group_ride_weekday_tss: int = 60,
         group_ride_weekend_tss: int = 90,
         group_ride_keywords: str = "group,club,fondo,race",
+        group_ride_counts_as_intervals: str = "",
         days_back: int = 28,
     ):
         self.openai = OpenAI(api_key=openai_api_key)
@@ -350,6 +356,7 @@ class TrainingAgent:
         self.group_ride_weekday_tss = group_ride_weekday_tss
         self.group_ride_weekend_tss = group_ride_weekend_tss
         self.group_ride_keywords = [k.strip() for k in group_ride_keywords.split(",") if k.strip()]
+        self.group_ride_counts_as_intervals = [d.strip() for d in group_ride_counts_as_intervals.split(",") if d.strip()]
         self.days_back_cap = days_back
 
     def _run_tool(self, name: str, args: dict) -> str:
@@ -471,6 +478,12 @@ class TrainingAgent:
 
         kw_str = ", ".join(self.group_ride_keywords) if self.group_ride_keywords else "none"
         group_context += f" Auto-detection keywords: {kw_str}."
+        if self.group_ride_counts_as_intervals:
+            interval_days = ", ".join(self.group_ride_counts_as_intervals)
+            group_context += (f" The following group ride days count toward the {self.hard_intervals_per_week} hard interval sessions per week: {interval_days}. "
+                              f"Do not schedule an additional hard interval session on these days or to compensate for them.")
+        else:
+            group_context += " No group ride days are configured to count as hard interval sessions."
 
         return SYSTEM_PROMPT.format(
             today=today.isoformat(),
