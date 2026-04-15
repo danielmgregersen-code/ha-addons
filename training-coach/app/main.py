@@ -94,7 +94,7 @@ def save_notifications(notifs: dict):
     # Sort by timestamp descending (newest first)
     notif_list.sort(key=lambda n: n.get("timestamp", ""), reverse=True)
     # Keep only the most recent MAX_NOTIFICATIONS
-    _save_json_file(NOTIFICATIONS_FILE, notif_list[-MAX_NOTIFICATIONS:], "could not save notifications")
+    _save_json_file(NOTIFICATIONS_FILE, notif_list[:MAX_NOTIFICATIONS], "could not save notifications")
 
 
 def load_session_names() -> dict:
@@ -299,7 +299,8 @@ def chat(req: ChatRequest):
 
 @app.get("/history/{session_id}", response_model=HistoryResponse)
 def get_history(session_id: str):
-    raw = sessions.get(session_id, [])
+    with sessions_lock:
+        raw = list(sessions.get(session_id, []))
     displayable = [
         m for m in raw
         if isinstance(m, dict) and m.get("role") in ("user", "assistant")
@@ -319,15 +320,19 @@ def clear_session(session_id: str):
 
 @app.get("/sessions")
 def list_sessions():
+    with sessions_lock:
+        snapshot = {sid: list(hist) for sid, hist in sessions.items()}
+    with session_names_lock:
+        names_snapshot = dict(session_names)
     return {
         sid: {
             "message_count": len([
                 m for m in hist
                 if isinstance(m, dict) and m.get("role") in ("user", "assistant")
             ]),
-            "name": session_names.get(sid, sid),
+            "name": names_snapshot.get(sid, sid),
         }
-        for sid, hist in sessions.items()
+        for sid, hist in snapshot.items()
     }
 
 
@@ -350,7 +355,6 @@ def update_session_name(req: dict):
     return {"ok": True}
 
 
-@app.get("/notifications")
 @app.get("/notifications")
 def get_notifications(since: str = None):
     """Return notifications, optionally filtered to only those after a timestamp."""

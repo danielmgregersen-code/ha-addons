@@ -102,6 +102,8 @@ class IntervalsClient:
         return {k: v for k, v in d.items() if v is not None}
 
     def _simplify_activity(self, a: dict, group_keywords: list[str] = None) -> dict:
+        raw_power_zones = a.get("icu_zone_times")
+        raw_hr_zones = a.get("icu_hr_zone_times")
         return {
             "id": a.get("id"),
             "name": a.get("name"),
@@ -116,8 +118,9 @@ class IntervalsClient:
             "intensity": a.get("icu_intensity"),
             "rpe": a.get("icu_rpe"),
             "feel": a.get("feel"),                   # 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak
-            "power_zone_times": a.get("icu_zone_times"),        # seconds per power zone [Z1..Z7]
-            "hr_zone_times": a.get("icu_hr_zone_times"),        # seconds per HR zone [Z1..Z5]
+            "compliance": a.get("icu_compliance"),   # >0 means matched a planned workout
+            "power_zone_mins": [round(s / 60, 1) for s in raw_power_zones] if raw_power_zones else None,
+            "hr_zone_mins": [round(s / 60, 1) for s in raw_hr_zones] if raw_hr_zones else None,
             "decoupling": a.get("decoupling"),
             "efficiency_factor": a.get("icu_efficiency_factor"),
             "variability_index": a.get("icu_variability_index"),
@@ -127,6 +130,7 @@ class IntervalsClient:
             "avg_cadence": a.get("average_cadence"),
             "coach_tick": a.get("coach_tick"),       # ID of coach tick if already reviewed
             "description": a.get("description"),     # coach comment lives here
+            "group_ride": self._is_group_ride(a, group_keywords),
         }
 
     def get_activity_detail(self, activity_id: str):

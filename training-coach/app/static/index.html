@@ -211,6 +211,8 @@
   </div>
 </div>
 
+<div id="notif-banner"></div>
+
 <div class="dialog-overlay" id="dialog-overlay">
   <div class="dialog">
     <h3>New session</h3>
@@ -494,18 +496,23 @@
     const card = document.createElement('div');
     card.className = 'notif-card';
     card.dataset.id = notif.id;
+    card.dataset.activityId = notif.activity_id;
+    card.dataset.activityName = notif.activity_name;
     card.innerHTML = `
       <div class="notif-header">
-        <span>⚡ Auto-review — ${notif.activity_date}</span>
-        <button class="notif-dismiss" onclick="dismissNotif('${notif.id}')">×</button>
+        <span>⚡ Auto-review — ${escapeHtml(notif.activity_date)}</span>
+        <button class="notif-dismiss">×</button>
       </div>
       <div class="notif-title">${escapeHtml(notif.activity_name)}</div>
       <div class="notif-preview">${escapeHtml(preview)}</div>
       <div class="notif-btns">
-        <button class="notif-btn primary" onclick="askMoreDetail('${notif.activity_id}', '${notif.activity_name.replace(/'/g, "\\'")}', '${notif.id}')">More detail</button>
-        <button class="notif-btn" onclick="dismissNotif('${notif.id}')">Dismiss</button>
+        <button class="notif-btn primary">More detail</button>
+        <button class="notif-btn">Dismiss</button>
       </div>
     `;
+    card.querySelector('.notif-dismiss').addEventListener('click', () => dismissNotif(notif.id));
+    card.querySelector('.notif-btn.primary').addEventListener('click', () => askMoreDetail(card.dataset.activityId, card.dataset.activityName, notif.id));
+    card.querySelector('.notif-btn:not(.primary)').addEventListener('click', () => dismissNotif(notif.id));
     notifBanner.appendChild(card);
     // Auto-dismiss after 60 seconds
     setTimeout(() => dismissNotif(notif.id), 60000);
@@ -585,6 +592,5 @@
     loadMissedNotifications();
   })();
 </script>
-<div id="notif-banner"></div>
 </body>
 </html>
