@@ -219,7 +219,7 @@ TOOLS = [
     },
 ]
 
-SYSTEM_PROMPT = """You are an expert bicycling coach with direct access 
+SYSTEM_PROMPT = """You are an expert bicycling coach with direct access
 to the athlete's training data via Intervals.icu.
 
 Athlete baselines:
@@ -265,7 +265,7 @@ Guidelines:
 - Fetch only as much history as the question needs — 3-5 days for a single workout, 7-10 for a weekly review, 28 for block or load trend analysis. Default to 7 if unsure
 - Weeks start on Monday (European standard). When referring to "this week" or "last week", Monday is the first day.
 - For interval analysis: fetch activities first to get the ID, then fetch intervals for that activity
-- When analysing intervals, comment on consistency across efforts, power/HR drift, 
+- When analysing intervals, comment on consistency across efforts, power/HR drift,
   work-to-rest ratio, and whether targets were met
 - Speed is stored as m/s — convert to min/km (pace = 1000/speed/60) or km/h as appropriate
 - When creating planned workouts, the description MUST use the Intervals.icu workout builder format so it renders as a structured workout with a visual bar graph and calculated TSS. The format is:
@@ -358,6 +358,10 @@ class TrainingAgent:
         self.group_ride_counts_as_intervals = [d.strip() for d in group_ride_counts_as_intervals.split(",") if d.strip()]
         self.days_back_cap = days_back
 
+        # Cache for system prompt — only rebuild if config changes
+        self._cached_system_prompt = None
+        self._cached_config_hash = None
+
     def _run_tool(self, name: str, args: dict) -> str:
         try:
             if name == "get_recent_activities":
@@ -419,9 +423,30 @@ class TrainingAgent:
             return json.dumps({"error": str(e)})
 
     def _build_system(self) -> str:
+        import hashlib
         from datetime import date as date_cls
         today = date_cls.today()
 
+        # Create a hash of config values to detect changes
+        config_key = (
+            self.hrv_min, self.hrv_max,
+            self.rhr_min, self.rhr_max,
+            self.hard_intervals_per_week,
+            self.block_start_date,
+            tuple(self.group_ride_days),
+            self.group_ride_weekday_tss,
+            self.group_ride_weekend_tss,
+            tuple(self.group_ride_keywords),
+            tuple(self.group_ride_counts_as_intervals),
+            today.isoformat(),  # Include today so it updates daily
+        )
+        current_hash = hashlib.md5(str(config_key).encode()).hexdigest()
+
+        # Return cached prompt if config hasn't changed
+        if self._cached_config_hash == current_hash and self._cached_system_prompt is not None:
+            return self._cached_system_prompt
+
+        # Config changed or cache empty — rebuild
         hrv_context = (
             f"HRV normal range: {self.hrv_min}–{self.hrv_max} ms. Below {self.hrv_min} is suppressed, above {self.hrv_max} is elevated."
             if self.hrv_min and self.hrv_max else
@@ -486,7 +511,7 @@ class TrainingAgent:
         else:
             group_context += " Group rides do not count toward the hard interval quota."
 
-        return SYSTEM_PROMPT.format(
+        prompt = SYSTEM_PROMPT.format(
             today=today.isoformat(),
             hrv_context=hrv_context,
             rhr_context=rhr_context,
@@ -494,6 +519,11 @@ class TrainingAgent:
             hard_intervals_per_week=self.hard_intervals_per_week,
             group_context=group_context,
         )
+
+        # Cache the result
+        self._cached_system_prompt = prompt
+        self._cached_config_hash = current_hash
+        return prompt
 
     def _safe_role(self, m) -> str:
         """Get role from either a dict or a ChatCompletionMessage object."""
@@ -601,399 +631,3 @@ class TrainingAgent:
                 return msg.content
 
         raise RuntimeError(f"Auto-review tool loop exceeded max iterations ({max_iterations}).")
-
-SYSTEM_PROMPT = """You are an expert bicycling coach with direct access 
-to the athlete's training data via Intervals.icu.
-
-Athlete baselines:
-{hrv_context}
-{rhr_context}
-
-Block periodization:
-{block_context}
-Hard interval sessions per week: {hard_intervals_per_week}
-
-Group rides:
-{group_context}
-
-Block structure (default cycle — overridden when a race is approaching):
-- Week 1 (Foundation): aerobic base, zone 2 focus, {hard_intervals_per_week} light interval sessions (e.g. tempo or sweet spot), moderate TSS
-- Week 2 (Build): increase load ~10%, {hard_intervals_per_week} structured interval sessions (threshold or VO2), higher TSS
-- Week 3 (Peak): highest load of the block, {hard_intervals_per_week} hard interval sessions (VO2max or above threshold), push TSS
-- Week 4 (Recovery): drop volume to ~50-60% of peak week, no hard intervals, zone 1-2 only, let adaptations consolidate
-
-Race-driven phase overrides (check upcoming A races when planning — use get_upcoming_races):
-
-Stage race detection: if multiple RACE_A events fall on consecutive or near-consecutive days, treat them as a single stage race block. The block runs from the first to the last race day. Use the first day for taper/phase calculations. Post-race recovery counts from the last race day.
-
-Phase rules (weeks to first race day):
-- Race days: activation only — short sharp efforts or complete rest. Gaps between stages are Z1 recovery only, no structured work
-- Taper (1–3 weeks out): cut volume 40–60% vs peak week, keep 1–2 short intensity sessions to maintain sharpness, prioritise freshness
-- Sharpening (4–5 weeks out): force peak/sharpening phase regardless of normal block cycle — highest quality intervals, controlled volume
-- Late build (6–8 weeks out): ensure build or peak phase — if normal cycle gives recovery, extend build by one week instead
-- Normal (>8 weeks out): follow the standard 1-2-3-4 block cycle
-- Post-race (up to 5 days after last race day): recovery week regardless of block position
-- Multiple race blocks: use the nearest to determine phase; mention the next in the weekly note
-- Always state race name, date(s), stage count if applicable, and phase override reason in the weekly note
-
-Your role:
-- Analyse recent training and provide honest, specific feedback
-- Drill into individual interval sessions when asked — compare work efforts, check if targets were hit
-- Comment on completed workouts and mark them as coach-reviewed using a coach tick
-- Plan and schedule future workouts based on goals and fatigue
-- Adjust training plans based on athlete requests or wellness data
-
-Guidelines:
-- Always fetch relevant data before commenting — never assume what a workout looks like
-- Fetch only as much history as the question needs — 3-5 days for a single workout, 7-10 for a weekly review, 28 for block or load trend analysis. Default to 7 if unsure
-- Weeks start on Monday (European standard). When referring to "this week" or "last week", Monday is the first day.
-- For interval analysis: fetch activities first to get the ID, then fetch intervals for that activity
-- When analysing intervals, comment on consistency across efforts, power/HR drift, 
-  work-to-rest ratio, and whether targets were met
-- Speed is stored as m/s — convert to min/km (pace = 1000/speed/60) or km/h as appropriate
-- When creating planned workouts, the description MUST use the Intervals.icu workout builder format so it renders as a structured workout with a visual bar graph and calculated TSS. The format is:
-
-Section headers are plain text lines (no dash). Steps start with a dash and include duration and target.
-Repeats are written as "Nx" on the line IMMEDIATELY before the indented repeated steps — the steps in the repeat block must each start with "- " and the whole block is indented or simply follows the Nx line directly. Each repeat step must be on its own line. The recovery between efforts is a step inside the repeat block, not outside it. When a session has multiple distinct sets with longer rest between them, write each set as its own separate Nx block with the inter-set rest as a plain step between the blocks — never nest repeat blocks inside each other.
-
-Duration formats: 30s, 10m, 1m30
-Targets: 100w (absolute watts), 80% (% of FTP), 60% HR (% of max HR), 100% LTHR, 90 rpm (cadence)
-Ranges: 80-90%, 100-140w
-Ramps: Ramp 60-80%
-Zones: Z1, Z2, Z3, Z4, Z5, Z6, Z7 (power) or Z1 HR, Z2 HR etc.
-
-Example:
-Warmup
-- 15m 55-65%
-
-Main set 4x
-- 8m 95-105%
-- 4m 40-50%
-
-Cooldown
-- 10m 55-65%
-
-For sweet spot work, use 88-93% rather than a zone label:
-Main set 3x
-- 12m 88-93%
-- 5m 50-60%
-
-Always structure workouts with Warmup / Main set / Cooldown sections. Use raw percentages or watt values rather than zone notation — fixed values (e.g. 75%, 250w) or ranges (e.g. 70-80%, 240-260w) are both fine. Include cadence guidance for key efforts
-- Consider cumulative fatigue before adding hard sessions
-- Confirm with the athlete before making changes to the calendar
-- Group ride handling:
-  * Group rides are detected by keywords in activity name/tags — the `group_ride` field will be True
-  * On scheduled group ride days: do not plan structured work, reserve the day, count estimated TSS toward weekly load
-  * If no group ride days are configured: when planning a week, ask if any group rides are expected and on which days
-  * After a group ride: check decoupling and RPE — if decoupling >8% or RPE >=8, soften the following day's session
-  * In weekly analysis: flag group rides separately, note their contribution to weekly TSS
-- Weekly planning note: always fetch the Monday note and check upcoming A races before analysing or planning a week. If no note exists, create one. If one already exists, ALWAYS update it by passing its event_id to write_weekly_note — never create a second note on the same Monday. When a race is within 8 weeks, state the phase override and weeks-to-race in the note
-- When writing a weekly note include: block week and focus (1-2 sentences), each planned session with date/name and a brief natural description of the session type and duration (e.g. "60m Z2 with sprint efforts", "90m easy aerobic", "60m threshold work") — NO specific percentages, NO interval structure details (no "3x15s at 150%", no "warm-up 15m 50-65%"), just the overall character of the session. Finish with expected weekly TSS. Example line: "Tue 21 Apr: Hibernation & Sparks — 60m Z2 with short sprint efforts"
-- feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
-- power_zone_times is an array of seconds spent in each power zone [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
-- Sweet spot (~88–93% FTP) overlaps the upper portion of Z3 and lower portion of Z4 — it is NOT a separate zone in the 7-zone model. When reporting zone times, sweet spot time is already counted within Z3 and Z4. Never list it as its own zone or add it on top of Z3/Z4 totals
-- hr_zone_times is an array of seconds spent in each HR zone [Z1, Z2, Z3, Z4, Z5]
-- When discussing zone distribution, convert seconds to minutes and comment on the balance
-- compliance field: if >0 the ride matched a planned workout; if null/0 it was unstructured
-- For MATCHED workouts (compliance > 0): focus primarily on interval execution — did efforts hit targets, how consistent were the reps, power/HR per interval. Cover zone distribution briefly as secondary context
-- For UNMATCHED/UNSTRUCTURED rides (compliance null or 0): give equal weight to interval efforts and zone distribution — both tell the story of what kind of ride it was
-- decoupling: aerobic decoupling % — HR drift relative to power over a ride; <5% is well-coupled, >10% suggests fatigue or heat
-- efficiency_factor: power/HR ratio — higher is more aerobically efficient; rising over time is a good sign
-- variability_index: normalised power / average power — closer to 1.0 means steady effort, higher means variable pacing
-- polarization_index: distribution between low and high intensity; higher = more polarised training
-- When posting a comment, ALWAYS also fetch coach ticks and set an appropriate coach_tick_id to mark the workout as reviewed
-- Today's date: {today}
-
-Sport types: Ride
-"""
-
-
-class TrainingAgent:
-    def __init__(
-        self,
-        openai_api_key: str,
-        intervals_athlete_id: str,
-        intervals_api_key: str,
-        hrv_min: int = 0,
-        hrv_max: int = 0,
-        rhr_min: int = 0,
-        rhr_max: int = 0,
-        hard_intervals_per_week: int = 2,
-        block_start_date: str = "",
-        group_ride_days: str = "",
-        group_ride_weekday_tss: int = 120,
-        group_ride_weekend_tss: int = 180,
-        group_ride_keywords: str = "group,club",
-        group_ride_counts_as_intervals: str = "",
-        days_back: int = 28,
-    ):
-        self.openai = OpenAI(api_key=openai_api_key)
-        self.icu = IntervalsClient(intervals_athlete_id, intervals_api_key)
-        self.hrv_min = hrv_min
-        self.hrv_max = hrv_max
-        self.rhr_min = rhr_min
-        self.rhr_max = rhr_max
-        self.hard_intervals_per_week = hard_intervals_per_week
-        self.block_start_date = block_start_date
-        self.group_ride_days = [d.strip() for d in group_ride_days.split(",") if d.strip()]
-        self.group_ride_weekday_tss = group_ride_weekday_tss
-        self.group_ride_weekend_tss = group_ride_weekend_tss
-        self.group_ride_keywords = [k.strip() for k in group_ride_keywords.split(",") if k.strip()]
-        self.group_ride_counts_as_intervals = [d.strip() for d in group_ride_counts_as_intervals.split(",") if d.strip()]
-        self.days_back_cap = days_back
-
-    def _run_tool(self, name: str, args: dict) -> str:
-        try:
-            if name == "get_recent_activities":
-                result = self.icu.get_activities(args.get("days_back", 7), max_days_back=self.days_back_cap, group_keywords=self.group_ride_keywords)
-            elif name == "get_activity_intervals":
-                result = self.icu.get_activity_intervals(args["activity_id"])
-            elif name == "get_wellness":
-                result = self.icu.get_wellness(args.get("days_back", 14))
-            elif name == "get_planned_workouts":
-                result = self.icu.get_events(args.get("days_ahead", 21))
-            elif name == "get_coach_ticks":
-                result = self.icu.get_athlete()
-            elif name == "post_activity_comment":
-                result = self.icu.post_activity_comment(
-                    args["activity_id"],
-                    args["comment"],
-                    coach_tick_id=args.get("coach_tick_id"),
-                )
-            elif name == "create_planned_workout":
-                result = self.icu.create_planned_workout(
-                    date=args["date"],
-                    name=args["name"],
-                    description=args["description"],
-                    sport_type=args.get("sport_type", "Ride"),
-                    planned_duration_seconds=args.get("planned_duration_seconds"),
-                    planned_tss=args.get("planned_tss"),
-                )
-            elif name == "update_planned_workout":
-                result = self.icu.update_planned_workout(
-                    event_id=args["event_id"],
-                    name=args.get("name"),
-                    description=args.get("description"),
-                    date=args.get("date"),
-                    sport_type=args.get("sport_type"),
-                    planned_duration_seconds=args.get("planned_duration_seconds"),
-                    planned_tss=args.get("planned_tss"),
-                    category=args.get("category"),
-                )
-            elif name == "get_upcoming_races":
-                result = self.icu.get_upcoming_races(args.get("days_ahead", 120))
-            elif name == "get_weekly_note":
-                result = self.icu.get_weekly_note(args["monday_date"])
-                if result is None:
-                    result = {"found": False, "monday_date": args["monday_date"],
-                              "message": "No weekly note found for this Monday."}
-            elif name == "write_weekly_note":
-                result = self.icu.write_weekly_note(
-                    monday_date=args["monday_date"],
-                    name=args["name"],
-                    content=args["content"],
-                    event_id=args.get("event_id"),
-                )
-            elif name == "delete_planned_workout":
-                result = self.icu.delete_event(args["event_id"])
-            else:
-                result = {"error": f"Unknown tool: {name}"}
-            return json.dumps(result)
-        except Exception as e:
-            return json.dumps({"error": str(e)})
-
-    def _build_system(self) -> str:
-        from datetime import date
-        hrv_context = (
-            f"HRV normal range: {self.hrv_min}–{self.hrv_max} ms. Below {self.hrv_min} is suppressed, above {self.hrv_max} is elevated."
-            if self.hrv_min and self.hrv_max else
-            f"HRV typical value: ~{self.hrv_max} ms." if self.hrv_max else
-            "HRV range: not configured."
-        )
-        rhr_context = (
-            f"Resting HR normal range: {self.rhr_min}–{self.rhr_max} bpm. Above {self.rhr_max} may indicate fatigue or illness."
-            if self.rhr_min and self.rhr_max else
-            f"Resting HR typical value: ~{self.rhr_max} bpm." if self.rhr_max else
-            "Resting HR range: not configured."
-        )
-        from datetime import date as date_cls
-        today = date_cls.today()
-
-        # Calculate block week
-        block_context = ""
-        if self.block_start_date:
-            try:
-                block_start = date_cls.fromisoformat(self.block_start_date)
-                days_in = (today - block_start).days
-                block_week = (days_in // 7) % 4 + 1
-                week_label = {1: "Week 1 — Foundation", 2: "Week 2 — Build",
-                              3: "Week 3 — Peak", 4: "Week 4 — Recovery"}[block_week]
-                block_context = f"Current block week: {block_week}/4 ({week_label})"
-            except Exception:
-                block_context = "Block start date is set but could not be parsed (use YYYY-MM-DD)."
-        else:
-            block_context = "Block start date not configured — ask the athlete which week of the block they are in if relevant."
-
-        # Group ride context
-        if self.group_ride_days:
-            days_str = ", ".join(self.group_ride_days)
-            weekend_days = {"saturday", "sunday"}
-            wd_days = [d for d in self.group_ride_days if d.lower() not in weekend_days]
-            we_days = [d for d in self.group_ride_days if d.lower() in weekend_days]
-            tss_parts = []
-            if wd_days:
-                tss_parts.append(f"{', '.join(wd_days)}: ~{self.group_ride_weekday_tss} TSS")
-            if we_days:
-                tss_parts.append(f"{', '.join(we_days)}: ~{self.group_ride_weekend_tss} TSS")
-            tss_str = "; ".join(tss_parts)
-            group_context = (
-                f"Scheduled group ride days: {days_str}. "
-                f"Estimated TSS per day — {tss_str}. "
-                f"Do not schedule structured workouts on these days. "
-                f"Count the estimated TSS toward the weekly load budget."
-            )
-        else:
-            group_context = (
-                "No group ride days configured. When planning a week, ask the athlete "
-                "whether they have any group rides planned and on which days, then account "
-                "for them in the plan."
-            )
-
-        kw_str = ", ".join(self.group_ride_keywords) if self.group_ride_keywords else "none"
-        group_context += f" Auto-detection keywords: {kw_str}."
-        if self.group_ride_counts_as_intervals:
-            ci_str = ", ".join(self.group_ride_counts_as_intervals)
-            group_context += (f" Group rides on {ci_str} count as one of the {self.hard_intervals_per_week} "
-                              f"hard interval sessions for the week — reduce planned structured hard sessions by 1 on weeks containing a group ride on these days.")
-        else:
-            group_context += " Group rides do not count toward the hard interval quota."
-        if self.group_ride_counts_as_intervals:
-            interval_days = ", ".join(self.group_ride_counts_as_intervals)
-            group_context += (f" The following group ride days count toward the {self.hard_intervals_per_week} hard interval sessions per week: {interval_days}. "
-                              f"Do not schedule an additional hard interval session on these days or to compensate for them.")
-        else:
-            group_context += " No group ride days are configured to count as hard interval sessions."
-
-        return SYSTEM_PROMPT.format(
-            today=today.isoformat(),
-            hrv_context=hrv_context,
-            rhr_context=rhr_context,
-            block_context=block_context,
-            hard_intervals_per_week=self.hard_intervals_per_week,
-            group_context=group_context,
-        )
-
-    def chat(self, user_message: str, history: list) -> tuple[str, list]:
-        system = self._build_system()
-        # Trim history to last 10 messages but always start on a user message
-        # to avoid orphaned tool/tool_calls pairs that cause API errors
-        trimmed = history[-10:] if len(history) > 10 else history
-        # Walk forward until we find a user message to start from
-        while trimmed and trimmed[0].get("role") != "user":
-            trimmed = trimmed[1:]
-        trimmed_history = trimmed if trimmed else history[-2:]
-        messages = [{"role": "system", "content": system}]
-        messages += trimmed_history
-        messages.append({"role": "user", "content": user_message})
-
-        max_iterations = 15
-        for iteration in range(max_iterations):
-            response = self.openai.chat.completions.create(
-                model="gpt-5.4",  # Full model for interactive chat — better reasoning and planning
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-            )
-            msg = response.choices[0].message
-
-            if msg.tool_calls:
-                # Convert ChatCompletionMessage to dict before appending
-                messages.append({
-                    "role": "assistant",
-                    "content": msg.content or "",
-                    "tool_calls": msg.tool_calls,
-                })
-                for call in msg.tool_calls:
-                    try:
-                        args = json.loads(call.function.arguments)
-                    except json.JSONDecodeError as e:
-                        # LLM returned invalid JSON; ask it to retry
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": f"Error parsing tool arguments: {e}. Please retry with valid JSON.",
-                        })
-                        continue
-                    result = self._run_tool(call.function.name, args)
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": result,
-                    })
-            else:
-                reply = msg.content
-                new_history = messages[1:]
-                new_history.append({"role": "assistant", "content": reply})
-                return reply, new_history
-
-        # Max iterations reached without final response
-        raise RuntimeError(f"Tool loop exceeded max iterations ({max_iterations}). LLM may be stuck in a loop.")
-
-    def auto_review(self, activity: dict) -> str:
-        """Generate a short auto-review comment for a newly uploaded activity.
-        Posts the comment + coach tick and returns the comment text."""
-        matched = activity.get("compliance") and activity.get("compliance") > 0
-        focus = (
-            "Focus primarily on interval execution vs planned targets, then briefly on zones."
-            if matched else
-            "Cover both interval efforts and zone distribution with equal weight."
-        )
-        prompt = (
-            f"A new ride was just uploaded. Write a concise coach review (3-5 sentences). {focus} "
-            f"Fetch coach ticks first, then post the comment with a tick if available (skip tick if list is empty, but always post the comment). "
-            f"Activity data: {json.dumps(activity)}"
-        )
-        system = self._build_system()
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ]
-
-        max_iterations = 15
-        for iteration in range(max_iterations):
-            response = self.openai.chat.completions.create(
-                model="gpt-5.4-mini",  # Mini for auto-review — high volume, straightforward task
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-            )
-            msg = response.choices[0].message
-            if msg.tool_calls:
-                # Convert ChatCompletionMessage to dict before appending
-                messages.append({
-                    "role": "assistant",
-                    "content": msg.content or "",
-                    "tool_calls": msg.tool_calls,
-                })
-                for call in msg.tool_calls:
-                    try:
-                        args = json.loads(call.function.arguments)
-                    except json.JSONDecodeError as e:
-                        # LLM returned invalid JSON; ask it to retry
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": f"Error parsing tool arguments: {e}. Please retry with valid JSON.",
-                        })
-                        continue
-                    result = self._run_tool(call.function.name, args)
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": result,
-                    })
-            else:
-                return msg.content
-
-        # Max iterations reached without final response
-        raise RuntimeError(f"Auto-review tool loop exceeded max iterations ({max_iterations}). LLM may be stuck.")
