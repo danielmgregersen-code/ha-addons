@@ -215,6 +215,8 @@ async def auto_review_loop():
             for activity in new_activities:
                 if activity.get("coach_tick"):
                     continue
+                if not activity.get("rpe") or not activity.get("feel"):
+                    continue
                 print(f"Auto-reviewing: {activity.get('name')} ({activity.get('id')})", flush=True)
                 comment = agent.auto_review(activity)
 
