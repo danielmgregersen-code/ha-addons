@@ -1126,7 +1126,12 @@ class TrainingAgent:
             msg = response.choices[0].message
 
             if msg.tool_calls:
-                messages.append(msg)
+                # Convert ChatCompletionMessage to dict before appending
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": msg.tool_calls,
+                })
                 for call in msg.tool_calls:
                     try:
                         args = json.loads(call.function.arguments)
@@ -1183,7 +1188,12 @@ class TrainingAgent:
             )
             msg = response.choices[0].message
             if msg.tool_calls:
-                messages.append(msg)
+                # Convert ChatCompletionMessage to dict before appending
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": msg.tool_calls,
+                })
                 for call in msg.tool_calls:
                     try:
                         args = json.loads(call.function.arguments)
