@@ -38,17 +38,35 @@ class IntervalsClient:
     ]
 
     def get_athlete(self):
-        """Fetch athlete profile including available coach_ticks.
+        """Fetch athlete profile including available coach_ticks and sport settings.
         If no ticks are configured, creates the default set automatically."""
         data = self._get(f"/athlete/{self.athlete_id}")
         ticks = data.get("coach_ticks", [])
         if not ticks:
             self._ensure_default_coach_ticks()
             ticks = self.DEFAULT_COACH_TICKS
+
+        # Extract user-configured FTP and LTHR from sport settings (prefer Ride)
+        ftp = None
+        lthr = None
+        max_hr = None
+        sport_settings = data.get("sportSettings") or []
+        # Prefer the Ride entry; fall back to the first entry with an FTP set
+        ride_settings = next(
+            (s for s in sport_settings if "Ride" in (s.get("types") or [])), None
+        ) or next((s for s in sport_settings if s.get("ftp")), None)
+        if ride_settings:
+            ftp = ride_settings.get("ftp")
+            lthr = ride_settings.get("lthr")
+            max_hr = ride_settings.get("max_hr")
+
         return {
             "id": data.get("id"),
             "name": data.get("name"),
             "coach_ticks": ticks,
+            "ftp": ftp,           # user-configured FTP (watts) — use this, not eFTP
+            "lthr": lthr,         # user-configured lactate threshold HR
+            "max_hr": max_hr,     # user-configured max HR
         }
 
     def _ensure_default_coach_ticks(self):

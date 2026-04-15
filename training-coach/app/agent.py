@@ -99,7 +99,11 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_coach_ticks",
-            "description": "Fetch the available coach tick options for this athlete. Call this before posting a comment so you know which tick IDs are available to mark the workout as reviewed.",
+            "description": (
+                "Fetch the available coach tick options for this athlete. Also returns the athlete's "
+                "user-configured ftp, lthr and max_hr — always use these values when interpreting "
+                "power percentages or HR zones, not the eFTP estimated from activity data."
+            ),
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -332,6 +336,7 @@ Always structure workouts with Warmup / Main set / Cooldown sections. Use raw pe
 - Sweet spot (~88–93% FTP) overlaps the upper portion of Z3 and lower portion of Z4 — it is NOT a separate zone in the 7-zone model. When reporting zone times, sweet spot time is already counted within Z3 and Z4. Never list it as its own zone or add it on top of Z3/Z4 totals
 - hr_zone_mins is an array of minutes spent in each HR zone [Z1, Z2, Z3, Z4, Z5]
 - When discussing zone distribution, comment on the balance (values are already in minutes)
+- FTP: always use the user-configured ftp from get_coach_ticks, not eFTP (icu_pm_ftp or icu_rolling_ftp) embedded in activity data. Call get_coach_ticks once per conversation if you need to reference FTP or LTHR.
 - compliance field: if >0 the ride matched a planned workout; if null/0 it was unstructured. When compliance >0 and paired_event_id is set, call get_planned_workout(paired_event_id) to fetch the planned structure, then compare it against the actual intervals — note which targets were hit or missed, how many reps were completed vs planned, and power/HR vs targets
 - For MATCHED workouts (compliance > 0): focus primarily on interval execution — did efforts hit targets, how consistent were the reps, power/HR per interval. Cover zone distribution briefly as secondary context
 - For UNMATCHED/UNSTRUCTURED rides (compliance null or 0): give equal weight to interval efforts and zone distribution — both tell the story of what kind of ride it was
