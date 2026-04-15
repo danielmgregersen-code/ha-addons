@@ -625,13 +625,13 @@ class TrainingAgent:
             "Fetch the activity intervals with get_activity_intervals for a full breakdown."
         )
         prompt = (
-            f"A new ride was just uploaded. Perform a thorough coach review — the same depth you "
-            f"would give if the athlete asked you directly. {planned_instruction} "
+            f"A new ride was just uploaded. {planned_instruction} "
             f"Also fetch coach ticks (get_coach_ticks) so you know the athlete's configured FTP, "
-            f"then post the full review as a comment on the activity with the most appropriate tick "
+            f"then post a brief coach note on the activity with the most appropriate tick "
             f"(skip tick if list is empty, but always post the comment). "
-            f"Cover: interval execution and consistency, power/HR vs targets, zone distribution, "
-            f"decoupling and efficiency, RPE/feel, and one or two concrete recommendations for next time. "
+            f"The note should be 5-10 sentences covering overall execution, standout metrics "
+            f"(power consistency, decoupling, HR drift, or planned vs actual), RPE/feel, and "
+            f"one or two concrete takeaways. End with: 'Ask me for a deeper analysis if you want more detail.' "
             f"Activity summary: {json.dumps(activity)}"
         )
         system = self._build_system()
