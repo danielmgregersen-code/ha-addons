@@ -137,6 +137,33 @@ sessions_lock = threading.RLock()
 notifications_lock = threading.RLock()
 session_names_lock = threading.RLock()
 
+# Debouncer for session saves — batch writes within a time window
+class Debouncer:
+    def __init__(self, delay_seconds: float = 5.0):
+        self.delay = delay_seconds
+        self.pending_task = None
+        self.lock = threading.Lock()
+
+    def schedule_save(self, save_func):
+        """Schedule a save, canceling any pending save first."""
+        with self.lock:
+            if self.pending_task:
+                self.pending_task.cancel()
+            self.pending_task = asyncio.create_task(self._delayed_save(save_func))
+
+    async def _delayed_save(self, save_func):
+        """Wait then execute save."""
+        try:
+            await asyncio.sleep(self.delay)
+            save_func()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            with self.lock:
+                self.pending_task = None
+
+sessions_debouncer = Debouncer(delay_seconds=5.0)
+
 agent = TrainingAgent(
     openai_api_key=options["openai_api_key"],
     intervals_athlete_id=options["intervals_athlete_id"],
@@ -197,7 +224,8 @@ async def auto_review_loop():
                         activity.get("date", ""),
                         comment,
                     )
-                    save_sessions(sessions)
+                    # Debounce the save
+                    sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
 
                 print(f"Auto-review done for {activity.get('id')}", flush=True)
         except Exception as e:
@@ -208,7 +236,18 @@ async def auto_review_loop():
 async def lifespan(app: FastAPI):
     task = asyncio.create_task(auto_review_loop())
     yield
+    # On shutdown: cancel auto-review loop and flush pending saves
     task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    # Wait for any pending debounced saves
+    if sessions_debouncer.pending_task:
+        try:
+            await sessions_debouncer.pending_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Training Coach", root_path_in_servers=False, lifespan=lifespan)
@@ -246,7 +285,8 @@ def chat(req: ChatRequest):
             updated_history = updated_history[-MAX_HISTORY_MESSAGES:]
         with sessions_lock:
             sessions[req.session_id] = updated_history
-            save_sessions(sessions)
+            # Debounce the save — batch writes within 5 second window
+            sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
         return ChatResponse(reply=reply)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -267,7 +307,8 @@ def get_history(session_id: str):
 def clear_session(session_id: str):
     with sessions_lock:
         sessions.pop(session_id, None)
-        save_sessions(sessions)
+        # Debounce the save
+        sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
     return {"cleared": session_id}
 
 
