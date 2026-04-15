@@ -48,70 +48,59 @@ def load_options() -> dict:
     }
 
 
-def load_sessions() -> dict:
-    if os.path.exists(HISTORY_FILE):
+def _load_json_file(path: str, default=None):
+    """Generic helper to load JSON file. Returns default if file missing or parsing fails."""
+    if default is None:
+        default = {}
+    if os.path.exists(path):
         try:
-            with open(HISTORY_FILE) as f:
+            with open(path) as f:
                 return json.load(f)
-        except Exception:
-            return {}
-    return {}
+        except (FileNotFoundError, json.JSONDecodeError, IOError):
+            return default
+    return default
+
+
+def _save_json_file(path: str, data, on_error_msg: str):
+    """Generic helper to save JSON file. Prints warning message on error."""
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f)
+    except IOError as e:
+        print(f"Warning: {on_error_msg}: {e}", flush=True)
+
+
+def load_sessions() -> dict:
+    return _load_json_file(HISTORY_FILE, {})
 
 
 def save_sessions(sessions: dict):
-    try:
-        with open(HISTORY_FILE, "w") as f:
-            json.dump(sessions, f)
-    except Exception as e:
-        print(f"Warning: could not save chat history: {e}", flush=True)
+    _save_json_file(HISTORY_FILE, sessions, "could not save chat history")
 
 
 def load_notifications() -> dict:
     """Load notifications from file and return as dict keyed by notif_id."""
-    if os.path.exists(NOTIFICATIONS_FILE):
-        try:
-            with open(NOTIFICATIONS_FILE) as f:
-                notif_list = json.load(f)
-                # Convert list to dict for O(1) lookup
-                return {n["id"]: n for n in notif_list if isinstance(n, dict)}
-        except Exception:
-            return {}
-    return {}
+    notif_list = _load_json_file(NOTIFICATIONS_FILE, [])
+    # Convert list to dict for O(1) lookup
+    return {n["id"]: n for n in notif_list if isinstance(n, dict)}
 
 
 def save_notifications(notifs: dict):
     """Save notifications dict to file as an ordered list (newest first)."""
-    try:
-        # Convert dict to list, keeping newest notifications first
-        notif_list = list(notifs.values())
-        # Sort by timestamp descending (newest first)
-        notif_list.sort(
-            key=lambda n: n.get("timestamp", ""),
-            reverse=True
-        )
-        # Keep only the most recent MAX_NOTIFICATIONS
-        with open(NOTIFICATIONS_FILE, "w") as f:
-            json.dump(notif_list[-MAX_NOTIFICATIONS:], f)
-    except Exception as e:
-        print(f"Warning: could not save notifications: {e}", flush=True)
+    # Convert dict to list, keeping newest notifications first
+    notif_list = list(notifs.values())
+    # Sort by timestamp descending (newest first)
+    notif_list.sort(key=lambda n: n.get("timestamp", ""), reverse=True)
+    # Keep only the most recent MAX_NOTIFICATIONS
+    _save_json_file(NOTIFICATIONS_FILE, notif_list[-MAX_NOTIFICATIONS:], "could not save notifications")
 
 
 def load_session_names() -> dict:
-    if os.path.exists(SESSION_NAMES_FILE):
-        try:
-            with open(SESSION_NAMES_FILE) as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+    return _load_json_file(SESSION_NAMES_FILE, {})
 
 
 def save_session_names(names: dict):
-    try:
-        with open(SESSION_NAMES_FILE, "w") as f:
-            json.dump(names, f)
-    except Exception as e:
-        print(f"Warning: could not save session names: {e}", flush=True)
+    _save_json_file(SESSION_NAMES_FILE, names, "could not save session names")
 
 
 def append_to_auto_review_session(sessions: dict, activity_name: str, activity_date: str, comment: str):
