@@ -45,6 +45,8 @@ def load_options() -> dict:
         "group_ride_weekend_tss": int(os.getenv("GROUP_RIDE_WEEKEND_TSS", "90")),
         "group_ride_keywords": os.getenv("GROUP_RIDE_KEYWORDS", "group,club,fondo,race"),
         "group_ride_counts_as_intervals": os.getenv("GROUP_RIDE_COUNTS_AS_INTERVALS", ""),
+        "chat_model": os.getenv("CHAT_MODEL", "gpt-5.4"),
+        "auto_review_model": os.getenv("AUTO_REVIEW_MODEL", "gpt-5.4-mini"),
     }
 
 
@@ -181,6 +183,8 @@ agent = TrainingAgent(
     group_ride_keywords=options.get("group_ride_keywords", "group,club,fondo,race"),
     group_ride_counts_as_intervals=options.get("group_ride_counts_as_intervals", ""),
     days_back=options.get("days_back", 28),
+    chat_model=options.get("chat_model", "gpt-5.4"),
+    auto_review_model=options.get("auto_review_model", "gpt-5.4-mini"),
 )
 
 

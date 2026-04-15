@@ -342,6 +342,8 @@ class TrainingAgent:
         group_ride_keywords: str = "group,club",
         group_ride_counts_as_intervals: str = "",
         days_back: int = 28,
+        chat_model: str = "gpt-5.4",
+        auto_review_model: str = "gpt-5.4-mini",
     ):
         self.openai = OpenAI(api_key=openai_api_key)
         self.icu = IntervalsClient(intervals_athlete_id, intervals_api_key)
@@ -357,6 +359,8 @@ class TrainingAgent:
         self.group_ride_keywords = [k.strip() for k in group_ride_keywords.split(",") if k.strip()]
         self.group_ride_counts_as_intervals = [d.strip() for d in group_ride_counts_as_intervals.split(",") if d.strip()]
         self.days_back_cap = days_back
+        self.chat_model = chat_model
+        self.auto_review_model = auto_review_model
 
         # Cache for system prompt — only rebuild if config changes
         self._cached_system_prompt = None
@@ -546,7 +550,7 @@ class TrainingAgent:
         max_iterations = 15
         for _ in range(max_iterations):
             response = self.openai.chat.completions.create(
-                model="gpt-5.4",  # Full model for interactive chat — better reasoning and planning
+                model=self.chat_model,
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
@@ -602,7 +606,7 @@ class TrainingAgent:
         max_iterations = 15
         for _ in range(max_iterations):
             response = self.openai.chat.completions.create(
-                model="gpt-5.4-mini",  # Mini for auto-review — high volume, straightforward task
+                model=self.auto_review_model,
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
