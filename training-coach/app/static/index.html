@@ -480,7 +480,11 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: currentSessionId, message: text }),
       });
-      if (!res.ok) { const err = await res.json(); throw new Error(err.detail || 'Server error'); }
+      if (!res.ok) {
+        let detail = 'Server error';
+        try { const err = await res.json(); detail = err.detail || detail; } catch { detail = await res.text() || detail; }
+        throw new Error(detail);
+      }
       const data = await res.json();
       hideThinking(); addMessage('coach', data.reply);
     } catch(e) { hideThinking(); addMessage('coach', `⚠ Error: ${e.message}`); }
