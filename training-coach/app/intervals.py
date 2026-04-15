@@ -119,7 +119,7 @@ class IntervalsClient:
             "rpe": a.get("icu_rpe"),
             "feel": a.get("feel"),                   # 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak
             "compliance": a.get("icu_compliance"),   # >0 means matched a planned workout
-            "power_zone_mins": [round(s / 60, 1) for s in raw_power_zones] if raw_power_zones else None,
+            "power_zone_mins": [round(z["secs"] / 60, 1) for z in raw_power_zones] if raw_power_zones else None,
             "hr_zone_mins": [round(s / 60, 1) for s in raw_hr_zones] if raw_hr_zones else None,
             "decoupling": a.get("decoupling"),
             "efficiency_factor": a.get("icu_efficiency_factor"),
