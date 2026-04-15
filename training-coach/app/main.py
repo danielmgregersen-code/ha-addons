@@ -140,30 +140,44 @@ sessions_lock = threading.RLock()
 notifications_lock = threading.RLock()
 session_names_lock = threading.RLock()
 
-# Debouncer for session saves — batch writes within a time window
+# Debouncer for session saves — batch writes within a time window.
+# Uses threading.Timer so it works correctly from sync endpoints (which run
+# in a thread pool and have no running event loop).
 class Debouncer:
     def __init__(self, delay_seconds: float = 5.0):
         self.delay = delay_seconds
-        self.pending_task = None
+        self._timer: threading.Timer | None = None
+        self._pending_func = None
         self.lock = threading.Lock()
 
     def schedule_save(self, save_func):
         """Schedule a save, canceling any pending save first."""
         with self.lock:
-            if self.pending_task:
-                self.pending_task.cancel()
-            self.pending_task = asyncio.create_task(self._delayed_save(save_func))
+            if self._timer:
+                self._timer.cancel()
+            self._pending_func = save_func
+            self._timer = threading.Timer(self.delay, self._run)
+            self._timer.daemon = True
+            self._timer.start()
 
-    async def _delayed_save(self, save_func):
-        """Wait then execute save."""
-        try:
-            await asyncio.sleep(self.delay)
-            save_func()
-        except asyncio.CancelledError:
-            pass
-        finally:
-            with self.lock:
-                self.pending_task = None
+    def _run(self):
+        with self.lock:
+            func = self._pending_func
+            self._pending_func = None
+            self._timer = None
+        if func:
+            func()
+
+    def flush(self):
+        """Cancel pending timer and run the save immediately if one is queued."""
+        with self.lock:
+            if self._timer:
+                self._timer.cancel()
+                self._timer = None
+            func = self._pending_func
+            self._pending_func = None
+        if func:
+            func()
 
 sessions_debouncer = Debouncer(delay_seconds=5.0)
 
@@ -247,12 +261,8 @@ async def lifespan(app: FastAPI):
         await task
     except asyncio.CancelledError:
         pass
-    # Wait for any pending debounced saves
-    if sessions_debouncer.pending_task:
-        try:
-            await sessions_debouncer.pending_task
-        except asyncio.CancelledError:
-            pass
+    # Flush any pending debounced saves
+    sessions_debouncer.flush()
 
 
 app = FastAPI(title="Training Coach", root_path_in_servers=False, lifespan=lifespan)
