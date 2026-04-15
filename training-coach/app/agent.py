@@ -3,11 +3,6 @@ from openai import OpenAI
 from intervals import IntervalsClient
 
 TOOLS = [
-    {import json
-from openai import OpenAI
-from intervals import IntervalsClient
-
-TOOLS = [
     {
         "type": "function",
         "function": {
