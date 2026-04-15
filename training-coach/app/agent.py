@@ -76,6 +76,28 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_planned_workout",
+            "description": (
+                "Fetch a single planned workout from the athlete's calendar by event ID. "
+                "Use this to compare what was planned against what was actually completed. "
+                "The paired_event_id on a completed activity is the event ID to pass here. "
+                "The description field contains the full workout structure."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "event_id": {
+                        "type": "integer",
+                        "description": "The calendar event ID (use paired_event_id from the completed activity).",
+                    }
+                },
+                "required": ["event_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_coach_ticks",
             "description": "Fetch the available coach tick options for this athlete. Call this before posting a comment so you know which tick IDs are available to mark the workout as reviewed.",
             "parameters": {"type": "object", "properties": {}},
@@ -310,7 +332,7 @@ Always structure workouts with Warmup / Main set / Cooldown sections. Use raw pe
 - Sweet spot (~88–93% FTP) overlaps the upper portion of Z3 and lower portion of Z4 — it is NOT a separate zone in the 7-zone model. When reporting zone times, sweet spot time is already counted within Z3 and Z4. Never list it as its own zone or add it on top of Z3/Z4 totals
 - hr_zone_mins is an array of minutes spent in each HR zone [Z1, Z2, Z3, Z4, Z5]
 - When discussing zone distribution, comment on the balance (values are already in minutes)
-- compliance field: if >0 the ride matched a planned workout; if null/0 it was unstructured
+- compliance field: if >0 the ride matched a planned workout; if null/0 it was unstructured. When compliance >0 and paired_event_id is set, call get_planned_workout(paired_event_id) to fetch the planned structure, then compare it against the actual intervals — note which targets were hit or missed, how many reps were completed vs planned, and power/HR vs targets
 - For MATCHED workouts (compliance > 0): focus primarily on interval execution — did efforts hit targets, how consistent were the reps, power/HR per interval. Cover zone distribution briefly as secondary context
 - For UNMATCHED/UNSTRUCTURED rides (compliance null or 0): give equal weight to interval efforts and zone distribution — both tell the story of what kind of ride it was
 - decoupling: aerobic decoupling % — HR drift relative to power over a ride; <5% is well-coupled, >10% suggests fatigue or heat
@@ -376,6 +398,8 @@ class TrainingAgent:
                 result = self.icu.get_wellness(args.get("days_back", 14))
             elif name == "get_planned_workouts":
                 result = self.icu.get_events(args.get("days_ahead", 21))
+            elif name == "get_planned_workout":
+                result = self.icu.get_event(args["event_id"])
             elif name == "get_coach_ticks":
                 result = self.icu.get_athlete()
             elif name == "post_activity_comment":

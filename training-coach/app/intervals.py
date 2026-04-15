@@ -119,6 +119,7 @@ class IntervalsClient:
             "rpe": a.get("icu_rpe"),
             "feel": a.get("feel"),                   # 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak
             "compliance": a.get("icu_compliance"),   # >0 means matched a planned workout
+            "paired_event_id": a.get("paired_event_id"),  # planned workout event ID, use with get_planned_workout
             "power_zone_mins": [round(z["secs"] / 60, 1) for z in raw_power_zones] if raw_power_zones else None,
             "hr_zone_mins": [round(s / 60, 1) for s in raw_hr_zones] if raw_hr_zones else None,
             "decoupling": a.get("decoupling"),
@@ -135,6 +136,20 @@ class IntervalsClient:
 
     def get_activity_detail(self, activity_id: str):
         return self._get(f"/athlete/{self.athlete_id}/activities/{activity_id}")
+
+    def get_event(self, event_id: int) -> dict:
+        """Fetch a single calendar event (planned workout) by ID."""
+        e = self._get(f"/athlete/{self.athlete_id}/events/{event_id}")
+        return {
+            "id": e.get("id"),
+            "date": e.get("start_date_local", "")[:10],
+            "name": e.get("name"),
+            "category": e.get("category"),
+            "description": e.get("description"),  # workout structure in Intervals.icu format
+            "duration_seconds": e.get("moving_time"),
+            "tss": e.get("icu_training_load"),
+            "type": e.get("type"),
+        }
 
     def get_activity_intervals(self, activity_id: str):
         try:
