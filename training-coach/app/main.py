@@ -66,20 +66,32 @@ def save_sessions(sessions: dict):
         print(f"Warning: could not save chat history: {e}", flush=True)
 
 
-def load_notifications() -> list:
+def load_notifications() -> dict:
+    """Load notifications from file and return as dict keyed by notif_id."""
     if os.path.exists(NOTIFICATIONS_FILE):
         try:
             with open(NOTIFICATIONS_FILE) as f:
-                return json.load(f)
+                notif_list = json.load(f)
+                # Convert list to dict for O(1) lookup
+                return {n["id"]: n for n in notif_list if isinstance(n, dict)}
         except Exception:
-            return []
-    return []
+            return {}
+    return {}
 
 
-def save_notifications(notifs: list):
+def save_notifications(notifs: dict):
+    """Save notifications dict to file as an ordered list (newest first)."""
     try:
+        # Convert dict to list, keeping newest notifications first
+        notif_list = list(notifs.values())
+        # Sort by timestamp descending (newest first)
+        notif_list.sort(
+            key=lambda n: n.get("timestamp", ""),
+            reverse=True
+        )
+        # Keep only the most recent MAX_NOTIFICATIONS
         with open(NOTIFICATIONS_FILE, "w") as f:
-            json.dump(notifs[-MAX_NOTIFICATIONS:], f)
+            json.dump(notif_list[-MAX_NOTIFICATIONS:], f)
     except Exception as e:
         print(f"Warning: could not save notifications: {e}", flush=True)
 
@@ -129,7 +141,7 @@ if not options.get("intervals_api_key"):
     raise RuntimeError("intervals_api_key is not configured.")
 
 sessions: dict[str, list] = load_sessions()
-notifications: list = load_notifications()
+notifications: dict = load_notifications()
 session_names: dict[str, str] = load_session_names()
 
 # Thread locks for concurrent request safety
@@ -213,7 +225,7 @@ async def auto_review_loop():
 
                 # Store in persistent notifications with lock
                 with notifications_lock:
-                    notifications.append(notif)
+                    notifications[notif["id"]] = notif
                     save_notifications(notifications)
 
                 # Log to auto-reviews session with lock
@@ -346,9 +358,10 @@ def update_session_name(req: dict):
 
 
 @app.get("/notifications")
+@app.get("/notifications")
 def get_notifications(since: str = None):
     """Return notifications, optionally filtered to only those after a timestamp."""
-    all_notifs = list(notifications)
+    all_notifs = list(notifications.values())  # Get notification objects (not keys)
     if since:
         try:
             since_dt = datetime.fromisoformat(since)
@@ -362,9 +375,8 @@ def get_notifications(since: str = None):
 def mark_seen(notif_id: str):
     """Mark a notification as seen."""
     with notifications_lock:
-        for n in notifications:
-            if n["id"] == notif_id:
-                n["seen"] = True
+        if notif_id in notifications:
+            notifications[notif_id]["seen"] = True
         save_notifications(notifications)
     return {"ok": True}
 
