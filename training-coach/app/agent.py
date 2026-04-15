@@ -423,7 +423,7 @@ class TrainingAgent:
             else:
                 result = {"error": f"Unknown tool: {name}"}
             return json.dumps(result)
-        except Exception as e:
+        except (KeyError, ValueError, TypeError, AttributeError, RuntimeError, OSError) as e:
             return json.dumps({"error": str(e)})
 
     def _build_system(self) -> str:
@@ -473,7 +473,7 @@ class TrainingAgent:
                 week_label = {1: "Week 1 — Foundation", 2: "Week 2 — Build",
                               3: "Week 3 — Peak", 4: "Week 4 — Recovery"}[block_week]
                 block_context = f"Current block week: {block_week}/4 ({week_label})"
-            except Exception:
+            except (ValueError, KeyError):
                 block_context = "Block start date is set but could not be parsed (use YYYY-MM-DD)."
         else:
             block_context = "Block start date not configured — ask the athlete which week of the block they are in if relevant."

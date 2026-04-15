@@ -293,7 +293,7 @@ def chat(req: ChatRequest):
             # Debounce the save — batch writes within 5 second window
             sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
         return ChatResponse(reply=reply)
-    except Exception as e:
+    except (RuntimeError, ValueError, KeyError, TypeError, AttributeError) as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -359,7 +359,7 @@ def get_notifications(since: str = None):
         try:
             since_dt = datetime.fromisoformat(since)
             all_notifs = [n for n in all_notifs if datetime.fromisoformat(n["timestamp"]) > since_dt]
-        except Exception:
+        except ValueError:
             pass
     return {"notifications": all_notifs}
 
