@@ -614,17 +614,25 @@ class TrainingAgent:
         raise RuntimeError(f"Tool loop exceeded max iterations ({max_iterations}). LLM may be stuck in a loop.")
 
     def auto_review(self, activity: dict) -> str:
-        """Generate a short auto-review comment for a newly uploaded activity."""
-        matched = activity.get("compliance") and activity.get("compliance") > 0
-        focus = (
-            "Focus primarily on interval execution vs planned targets, then briefly on zones."
-            if matched else
-            "Cover both interval efforts and zone distribution with equal weight."
+        """Generate a thorough coach review for a newly uploaded activity."""
+        paired_event_id = activity.get("paired_event_id")
+        planned_instruction = (
+            f"The activity was matched to a planned workout (paired_event_id={paired_event_id}). "
+            f"Fetch the planned workout with get_planned_workout({paired_event_id}), then fetch the "
+            f"actual intervals with get_activity_intervals. Compare planned vs actual: which targets "
+            f"were hit, which were missed, how many reps were completed vs planned."
+            if paired_event_id else
+            "Fetch the activity intervals with get_activity_intervals for a full breakdown."
         )
         prompt = (
-            f"A new ride was just uploaded. Write a concise coach review (3-5 sentences). {focus} "
-            f"Fetch coach ticks first, then post the comment with a tick if available (skip tick if list is empty, but always post the comment). "
-            f"Activity data: {json.dumps(activity)}"
+            f"A new ride was just uploaded. Perform a thorough coach review — the same depth you "
+            f"would give if the athlete asked you directly. {planned_instruction} "
+            f"Also fetch coach ticks (get_coach_ticks) so you know the athlete's configured FTP, "
+            f"then post the full review as a comment on the activity with the most appropriate tick "
+            f"(skip tick if list is empty, but always post the comment). "
+            f"Cover: interval execution and consistency, power/HR vs targets, zone distribution, "
+            f"decoupling and efficiency, RPE/feel, and one or two concrete recommendations for next time. "
+            f"Activity summary: {json.dumps(activity)}"
         )
         system = self._build_system()
         messages = [
@@ -635,7 +643,7 @@ class TrainingAgent:
         max_iterations = 15
         for _ in range(max_iterations):
             response = self.openai.chat.completions.create(
-                model=self.auto_review_model,
+                model=self.chat_model,
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
