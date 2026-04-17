@@ -565,12 +565,17 @@ class TrainingAgent:
     def chat(self, user_message: str, history: list) -> tuple[str, list]:
         system = self._build_system()
 
-        # Trim history to last 10 messages, always starting on a user message
-        # to avoid orphaned tool/tool_calls pairs that cause API 400 errors
-        trimmed = history[-10:] if len(history) > 10 else history
-        while trimmed and self._safe_role(trimmed[0]) != "user":
-            trimmed = trimmed[1:]
-        trimmed_history = trimmed if trimmed else history[-2:]
+        # Trim history by turns, not raw message count.
+        # A single turn can produce many messages (user + several tool call rounds +
+        # final reply), so a fixed -10 window can land mid-turn with no user message,
+        # causing OpenAI to reject the request with a 'tool without tool_calls' error.
+        # Instead, find the last 3 user-message boundaries and start from there.
+        user_positions = [i for i, m in enumerate(history) if self._safe_role(m) == "user"]
+        if user_positions:
+            start = user_positions[max(0, len(user_positions) - 3)]
+            trimmed_history = history[start:]
+        else:
+            trimmed_history = []
 
         messages = [{"role": "system", "content": system}]
         messages += trimmed_history
