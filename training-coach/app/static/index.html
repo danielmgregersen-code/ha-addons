@@ -482,7 +482,7 @@
       });
       if (!res.ok) {
         let detail = 'Server error';
-        try { const err = await res.json(); detail = err.detail || detail; } catch { detail = await res.text() || detail; }
+        try { const text = await res.text(); try { detail = JSON.parse(text).detail || text || detail; } catch { detail = text || detail; } } catch { }
         throw new Error(detail);
       }
       const data = await res.json();
