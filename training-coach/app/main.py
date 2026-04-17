@@ -305,7 +305,7 @@ def chat(req: ChatRequest):
             # Debounce the save — batch writes within 5 second window
             sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
         return ChatResponse(reply=reply)
-    except (RuntimeError, ValueError, KeyError, TypeError, AttributeError) as e:
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
