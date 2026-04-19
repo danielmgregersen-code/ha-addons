@@ -562,7 +562,7 @@ class TrainingAgent:
         """Get role from either a dict or a ChatCompletionMessage object."""
         return m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
 
-    def chat(self, user_message: str, history: list) -> tuple[str, list]:
+    def chat(self, user_message: str, history: list) -> tuple[str, list, dict]:
         system = self._build_system()
 
         # Strip tool-call internals before building the context window.
@@ -590,6 +590,7 @@ class TrainingAgent:
         messages += trimmed_history
         messages.append({"role": "user", "content": user_message})
 
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         max_iterations = 15
         for _ in range(max_iterations):
             response = self.openai.chat.completions.create(
@@ -598,6 +599,10 @@ class TrainingAgent:
                 tools=TOOLS,
                 tool_choice="auto",
             )
+            if response.usage:
+                usage["prompt_tokens"] += response.usage.prompt_tokens
+                usage["completion_tokens"] += response.usage.completion_tokens
+                usage["total_tokens"] += response.usage.total_tokens
             msg = response.choices[0].message
 
             if msg.tool_calls:
@@ -623,7 +628,7 @@ class TrainingAgent:
                 reply = msg.content
                 new_history = messages[1:]
                 new_history.append({"role": "assistant", "content": reply})
-                return reply, new_history
+                return reply, new_history, usage
 
         raise RuntimeError(f"Tool loop exceeded max iterations ({max_iterations}). LLM may be stuck in a loop.")
 
@@ -654,6 +659,7 @@ class TrainingAgent:
             {"role": "user", "content": prompt},
         ]
 
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         max_iterations = 15
         for _ in range(max_iterations):
             response = self.openai.chat.completions.create(
@@ -662,6 +668,10 @@ class TrainingAgent:
                 tools=TOOLS,
                 tool_choice="auto",
             )
+            if response.usage:
+                usage["prompt_tokens"] += response.usage.prompt_tokens
+                usage["completion_tokens"] += response.usage.completion_tokens
+                usage["total_tokens"] += response.usage.total_tokens
             msg = response.choices[0].message
             if msg.tool_calls:
                 # Serialise to dict so history stays JSON-serialisable
@@ -683,6 +693,6 @@ class TrainingAgent:
                         "content": result,
                     })
             else:
-                return msg.content
+                return msg.content, usage
 
         raise RuntimeError(f"Auto-review tool loop exceeded max iterations ({max_iterations}).")

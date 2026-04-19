@@ -197,6 +197,7 @@
     </div>
     <div id="session-list"></div>
     <div class="sidebar-hint">Session names must match across devices to share history.</div>
+    <div class="sidebar-hint" id="token-counter" style="border-top:none;padding-top:2px;">Tokens today: —</div>
   </div>
   <div class="chat-area">
     <div id="messages"></div>
@@ -486,7 +487,7 @@
         throw new Error(detail);
       }
       const data = await res.json();
-      hideThinking(); addMessage('coach', data.reply);
+      hideThinking(); addMessage('coach', data.reply); refreshTokens();
     } catch(e) { hideThinking(); addMessage('coach', `⚠ Error: ${e.message}`); }
     finally { busy = false; sendBtn.disabled = false; inputEl.focus(); messagesEl.scrollTop = messagesEl.scrollHeight; }
   }
@@ -571,6 +572,21 @@
 
   // Poll every 30 seconds
   setInterval(pollNotifications, 30000);
+
+  // ── Token counter ──
+  const tokenEl = document.getElementById('token-counter');
+  async function refreshTokens() {
+    try {
+      const res = await fetch(`${BASE}/tokens`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const t = data.total_tokens || 0;
+      const label = t >= 1000 ? `${(t / 1000).toFixed(1)}k` : `${t}`;
+      tokenEl.textContent = `Tokens today: ${label}`;
+    } catch {}
+  }
+  refreshTokens();
+  setInterval(refreshTokens, 60000);
 
   // Toggle sidebar on mobile
   function toggleSidebar() {

@@ -18,6 +18,7 @@ STORAGE_DIR = "/data"
 HISTORY_FILE = f"{STORAGE_DIR}/chat_history.json"
 NOTIFICATIONS_FILE = f"{STORAGE_DIR}/notifications.json"
 SESSION_NAMES_FILE = f"{STORAGE_DIR}/session_names.json"
+TOKEN_USAGE_FILE = f"{STORAGE_DIR}/token_usage.json"
 MAX_HISTORY_MESSAGES = 200
 MAX_NOTIFICATIONS = 100
 POLL_INTERVAL_SECONDS = 120
@@ -105,6 +106,31 @@ def save_session_names(names: dict):
     _save_json_file(SESSION_NAMES_FILE, names, "could not save session names")
 
 
+def load_token_usage() -> dict:
+    today = datetime.now().strftime("%Y-%m-%d")
+    data = _load_json_file(TOKEN_USAGE_FILE, {})
+    if data.get("date") != today:
+        return {"date": today, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    return data
+
+
+def save_token_usage(data: dict):
+    _save_json_file(TOKEN_USAGE_FILE, data, "could not save token usage")
+
+
+def accumulate_tokens(usage: dict):
+    """Add usage dict to today's running total and persist."""
+    with token_usage_lock:
+        today = datetime.now().strftime("%Y-%m-%d")
+        if token_usage.get("date") != today:
+            token_usage.clear()
+            token_usage.update({"date": today, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+        token_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
+        token_usage["completion_tokens"] += usage.get("completion_tokens", 0)
+        token_usage["total_tokens"] += usage.get("total_tokens", 0)
+        save_token_usage(token_usage)
+
+
 def append_to_auto_review_session(sessions: dict, activity_name: str, activity_date: str, comment: str):
     """Add an auto-review comment to the dedicated auto-reviews session."""
     history = sessions.get(AUTO_REVIEW_SESSION, [])
@@ -134,11 +160,13 @@ if not options.get("intervals_api_key"):
 sessions: dict[str, list] = load_sessions()
 notifications: dict = load_notifications()
 session_names: dict[str, str] = load_session_names()
+token_usage: dict = load_token_usage()
 
 # Thread locks for concurrent request safety
 sessions_lock = threading.RLock()
 notifications_lock = threading.RLock()
 session_names_lock = threading.RLock()
+token_usage_lock = threading.RLock()
 
 # Debouncer for session saves — batch writes within a time window.
 # Uses threading.Timer so it works correctly from sync endpoints (which run
@@ -218,7 +246,8 @@ async def auto_review_loop():
                 if not activity.get("rpe") or not activity.get("feel"):
                     continue
                 print(f"Auto-reviewing: {activity.get('name')} ({activity.get('id')})", flush=True)
-                comment = agent.auto_review(activity)
+                comment, usage = agent.auto_review(activity)
+                accumulate_tokens(usage)
 
                 # Build notification
                 notif = {
@@ -297,7 +326,8 @@ def chat(req: ChatRequest):
     with sessions_lock:
         history = sessions.get(req.session_id, [])
     try:
-        reply, updated_history = agent.chat(req.message, history)
+        reply, updated_history, usage = agent.chat(req.message, history)
+        accumulate_tokens(usage)
         if len(updated_history) > MAX_HISTORY_MESSAGES:
             updated_history = updated_history[-MAX_HISTORY_MESSAGES:]
         with sessions_lock:
@@ -393,6 +423,13 @@ def mark_seen(notif_id: str):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/tokens")
+def get_tokens():
+    """Return today's token usage totals."""
+    with token_usage_lock:
+        return dict(token_usage)
 
 
 @app.get("/debug/storage")
