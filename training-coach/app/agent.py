@@ -324,10 +324,11 @@ Always structure workouts with Warmup / Main set / Cooldown sections. Use raw pe
 - Consider cumulative fatigue before adding hard sessions
 - Confirm with the athlete before making changes to the calendar
 - Group ride handling:
-  * Group rides are detected by keywords in activity name/tags — the `group_ride` field will be True
-  * On scheduled group ride days: do not plan structured work, reserve the day, count estimated TSS toward weekly load
-  * If no group ride days are configured: when planning a week, ask if any group rides are expected and on which days
-  * After a group ride: check decoupling and RPE — if decoupling >8% or RPE >=8, soften the following day's session
+  * Group rides are detected by keywords in activity name/tags — the `group_ride` field will be True for completed rides
+  * When planning a week: call get_planned_workouts and scan for events whose name matches the group ride keywords. Also ask the athlete if any group rides are expected that are not yet on the calendar
+  * For each group ride found or mentioned, ask two questions before finalising the plan: (1) should it count as one of the {hard_intervals_per_week} hard interval sessions? (2) if yes, what type — VO2max, threshold, sweet spot, or other? Adjust the number of additional structured sessions accordingly
+  * Do not pre-reserve a day or assign a fixed TSS estimate for group rides — let the athlete decide the role of each one
+  * After a completed group ride: check decoupling and RPE — if decoupling >8% or RPE >=8, soften the following day's session
   * In weekly analysis: flag group rides separately, note their contribution to weekly TSS
 - Weekly planning note: always fetch the Monday note and check upcoming A races before analysing or planning a week. If no note exists, create one. If one already exists, ALWAYS update it by passing its event_id to write_weekly_note — never create a second note on the same Monday. When a race is within 8 weeks, state the phase override and weeks-to-race in the note
 - When writing a weekly note include: block week and focus (1-2 sentences), each planned session with date/name and a brief natural description of the session type and duration (e.g. "60m Z2 with sprint efforts", "90m easy aerobic", "60m threshold work") — NO specific percentages, NO interval structure details (no "3x15s at 150%", no "warm-up 15m 50-65%"), just the overall character of the session. Finish with expected weekly TSS. Example line: "Tue 21 Apr: Hibernation & Sparks — 60m Z2 with short sprint efforts"
@@ -363,11 +364,7 @@ class TrainingAgent:
         rhr_max: int = 0,
         hard_intervals_per_week: int = 2,
         block_start_date: str = "",
-        group_ride_days: str = "",
-        group_ride_weekday_tss: int = 120,
-        group_ride_weekend_tss: int = 180,
         group_ride_keywords: str = "group,club",
-        group_ride_counts_as_intervals: str = "",
         days_back: int = 28,
         chat_model: str = "gpt-5.5",
         auto_review_model: str = "gpt-5.5-mini",
@@ -380,11 +377,7 @@ class TrainingAgent:
         self.rhr_max = rhr_max
         self.hard_intervals_per_week = hard_intervals_per_week
         self.block_start_date = block_start_date
-        self.group_ride_days = [d.strip() for d in group_ride_days.split(",") if d.strip()]
-        self.group_ride_weekday_tss = group_ride_weekday_tss
-        self.group_ride_weekend_tss = group_ride_weekend_tss
         self.group_ride_keywords = [k.strip() for k in group_ride_keywords.split(",") if k.strip()]
-        self.group_ride_counts_as_intervals = [d.strip() for d in group_ride_counts_as_intervals.split(",") if d.strip()]
         self.days_back_cap = days_back
         self.chat_model = chat_model
         self.auto_review_model = auto_review_model
@@ -466,11 +459,7 @@ class TrainingAgent:
             self.rhr_min, self.rhr_max,
             self.hard_intervals_per_week,
             self.block_start_date,
-            tuple(self.group_ride_days),
-            self.group_ride_weekday_tss,
-            self.group_ride_weekend_tss,
             tuple(self.group_ride_keywords),
-            tuple(self.group_ride_counts_as_intervals),
             today.isoformat(),  # Include today so it updates daily
         )
         current_hash = hashlib.md5(str(config_key).encode()).hexdigest()
@@ -507,42 +496,8 @@ class TrainingAgent:
         else:
             block_context = "Block start date not configured — ask the athlete which week of the block they are in if relevant."
 
-        # Group ride context
-        if self.group_ride_days:
-            days_str = ", ".join(self.group_ride_days)
-            weekend_days = {"saturday", "sunday"}
-            wd_days = [d for d in self.group_ride_days if d.lower() not in weekend_days]
-            we_days = [d for d in self.group_ride_days if d.lower() in weekend_days]
-            tss_parts = []
-            if wd_days:
-                tss_parts.append(f"{', '.join(wd_days)}: ~{self.group_ride_weekday_tss} TSS")
-            if we_days:
-                tss_parts.append(f"{', '.join(we_days)}: ~{self.group_ride_weekend_tss} TSS")
-            tss_str = "; ".join(tss_parts)
-            group_context = (
-                f"Scheduled group ride days: {days_str}. "
-                f"Estimated TSS per day — {tss_str}. "
-                f"Do not schedule structured workouts on these days. "
-                f"Count the estimated TSS toward the weekly load budget."
-            )
-        else:
-            group_context = (
-                "No group ride days configured. When planning a week, ask the athlete "
-                "whether they have any group rides planned and on which days, then account "
-                "for them in the plan."
-            )
-
         kw_str = ", ".join(self.group_ride_keywords) if self.group_ride_keywords else "none"
-        group_context += f" Auto-detection keywords: {kw_str}."
-        if self.group_ride_counts_as_intervals:
-            ci_str = ", ".join(self.group_ride_counts_as_intervals)
-            group_context += (
-                f" Group rides on {ci_str} count as one of the {self.hard_intervals_per_week} "
-                f"hard interval sessions for the week — reduce planned structured hard sessions "
-                f"by 1 on weeks containing a group ride on these days."
-            )
-        else:
-            group_context += " Group rides do not count toward the hard interval quota."
+        group_context = f"Group ride auto-detection keywords: {kw_str}."
 
         prompt = SYSTEM_PROMPT.format(
             today=today.isoformat(),

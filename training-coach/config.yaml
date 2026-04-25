@@ -1,6 +1,6 @@
 name: "Training Coach"
 description: "AI coaching agent connected to your Intervals.icu training data."
-version: "1.1.41"
+version: "1.1.42"
 slug: "training_coach"
 init: false
 arch:
@@ -32,11 +32,7 @@ options:
   rhr_max: 54
   hard_intervals_per_week: 3
   block_start_date: ""
-  group_ride_days: "Wednesday,Sunday"
-  group_ride_weekday_tss: 120
-  group_ride_weekend_tss: 180
   group_ride_keywords: "group,club"
-  group_ride_counts_as_intervals: "Wednesday"
   chat_model: "gpt-5.4"
   auto_review_model: "gpt-5.4-mini"
 
@@ -52,11 +48,7 @@ schema:
   rhr_max: int
   hard_intervals_per_week: int
   block_start_date: str
-  group_ride_days: str
-  group_ride_weekday_tss: int
-  group_ride_weekend_tss: int
   group_ride_keywords: str
-  group_ride_counts_as_intervals: str
   chat_model: str
   auto_review_model: str
 
