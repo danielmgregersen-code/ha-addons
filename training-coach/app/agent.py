@@ -323,6 +323,11 @@ Main set 3x
 Always structure workouts with Warmup / Main set / Cooldown sections. Use raw percentages or watt values rather than zone notation — fixed values (e.g. 75%, 250w) or ranges (e.g. 70-80%, 240-260w) are both fine. Include cadence guidance for key efforts
 - Consider cumulative fatigue before adding hard sessions
 - Confirm with the athlete before making changes to the calendar
+- Fueling plan: whenever you plan a workout, always include a fueling recommendation in your reply (not in the Intervals.icu description). Scale it to duration and intensity:
+  * < 60 min / low intensity: water only, no on-bike fueling needed
+  * 60–90 min / moderate: small pre-ride meal 2–3 h before, 1 gel or 20–30 g carbs/h on the bike if intensity is moderate or above, electrolytes if hot
+  * > 90 min or high intensity (threshold/VO2): carb-rich meal 2–3 h before, 60–90 g carbs/h on the bike (gels, bars, or drink mix), start fueling in the first 20 min, electrolytes throughout
+  * Recovery nutrition: for any session over 60 min or TSS > 60, recommend 20–30 g protein + carbs within 30–45 min post-ride
 - Group ride handling:
   * Group rides are detected by keywords in activity name/tags — the `group_ride` field will be True for completed rides
   * When planning a week: call get_planned_workouts and scan for events whose name matches the group ride keywords. Also ask the athlete if any group rides are expected that are not yet on the calendar
@@ -367,7 +372,7 @@ class TrainingAgent:
         group_ride_keywords: str = "group,club",
         days_back: int = 28,
         chat_model: str = "gpt-5.5",
-        auto_review_model: str = "gpt-5.5-mini",
+        auto_review_model: str = "gpt-5.5",
     ):
         self.openai = OpenAI(api_key=openai_api_key)
         self.icu = IntervalsClient(intervals_athlete_id, intervals_api_key)
