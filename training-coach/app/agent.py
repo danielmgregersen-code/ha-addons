@@ -304,23 +304,28 @@ Targets: 100w (absolute watts), 80% (% of FTP), 60% HR (% of max HR), 100% LTHR,
 Ranges: 80-90%, 100-140w
 Ramps: Ramp 60-80%
 
-Example:
-Warmup
-- 15m 55-65%
+Press lap convention: add a "Press lap" step before every major interval so the athlete can mark clean laps on their device. Rules:
+- End of warmup: add "- Press lap 1m 50-60%" as the final warmup step
+- Inside each repeat block: make the last recovery step "- Recovery Press lap 1m 50-60%" (or similar easy intensity). This signals the athlete to lap right before the next work effort begins
+- Start of cooldown: prefix the first cooldown step name with "Cooldown Press lap" (e.g. "- Cooldown Press lap 10m 50-65%")
+- Exception: omit the press lap recovery step when recovery between intervals is <= 1 min (too short to squeeze one in)
 
-Main set 4x
-- 8m 95-105%
-- 4m 40-50%
+Example (sweet spot):
+Warmup
+- 10m 50-65%
+- 3m 75-85%
+- 2m 50-60%
+- Press lap 1m 50-60%
+
+Main set 3x
+- Sweetspot 15m 88-92%
+- Recovery 5m 50-60%
+- Recovery Press lap 1m 50-60%
 
 Cooldown
-- 10m 55-65%
+- Cooldown Press lap 10m 50-65%
 
-For sweet spot work, use 88-93% rather than a zone label:
-Main set 3x
-- 12m 88-93%
-- 5m 50-60%
-
-Always structure workouts with Warmup / Main set / Cooldown sections. Use raw percentages or watt values rather than zone notation — fixed values (e.g. 75%, 250w) or ranges (e.g. 70-80%, 240-260w) are both fine. Include cadence guidance for key efforts
+For sweet spot work, use 88-93% rather than a zone label. Always structure workouts with Warmup / Main set / Cooldown sections. Use raw percentages or watt values rather than zone notation — fixed values (e.g. 75%, 250w) or ranges (e.g. 70-80%, 240-260w) are both fine. Include cadence guidance for key efforts
 - Consider cumulative fatigue before adding hard sessions
 - Confirm with the athlete before making changes to the calendar
 - Fueling plan: whenever you plan a workout, always include a fueling recommendation in your reply (not in the Intervals.icu description). Use duration as the baseline and intensity as the multiplier:
