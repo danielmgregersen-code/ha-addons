@@ -369,8 +369,8 @@ class TrainingAgent:
         group_ride_keywords: str = "group,club",
         group_ride_counts_as_intervals: str = "",
         days_back: int = 28,
-        chat_model: str = "gpt-5.4",
-        auto_review_model: str = "gpt-5.4-mini",
+        chat_model: str = "gpt-5.5",
+        auto_review_model: str = "gpt-5.5-mini",
     ):
         self.openai = OpenAI(api_key=openai_api_key)
         self.icu = IntervalsClient(intervals_athlete_id, intervals_api_key)
