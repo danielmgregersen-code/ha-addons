@@ -221,7 +221,7 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "monday_date": {"type": "string", "description": "YYYY-MM-DD of the Monday."},
-                    "name": {"type": "string", "description": "Short title e.g. 'Week 2 — Build'"},
+                    "name": {"type": "string", "description": "Short title e.g. 'Week 2 — Progressive Overload'"},
                     "content": {"type": "string", "description": "Full weekly plan content."},
                     "event_id": {"type": "integer", "description": "Existing event ID if updating rather than creating."},
                 },
@@ -507,8 +507,8 @@ class TrainingAgent:
                 block_start = date_cls.fromisoformat(self.block_start_date)
                 days_in = (today - block_start).days
                 block_week = (days_in // 7) % 4 + 1
-                week_label = {1: "Week 1 — Foundation", 2: "Week 2 — Build",
-                              3: "Week 3 — Peak", 4: "Week 4 — Recovery"}[block_week]
+                week_label = {1: "Week 1 — Base Load", 2: "Week 2 — Progressive Overload",
+                              3: "Week 3 — Peak Stress", 4: "Week 4 — Deload"}[block_week]
                 block_context = f"Current block week: {block_week}/4 ({week_label})"
             except (ValueError, KeyError):
                 block_context = "Block start date is set but could not be parsed (use YYYY-MM-DD)."
