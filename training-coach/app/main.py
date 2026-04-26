@@ -41,9 +41,9 @@ def load_options() -> dict:
         "rhr_max": int(os.getenv("RHR_MAX", "0")),
         "hard_intervals_per_week": int(os.getenv("HARD_INTERVALS_PER_WEEK", "2")),
         "block_start_date": os.getenv("BLOCK_START_DATE", ""),
-        "group_ride_keywords": os.getenv("GROUP_RIDE_KEYWORDS", "group,club,fondo,race"),
-        "chat_model": os.getenv("CHAT_MODEL", "gpt-5.4"),
-        "auto_review_model": os.getenv("AUTO_REVIEW_MODEL", "gpt-5.4-mini"),
+        "group_ride_keywords": os.getenv("GROUP_RIDE_KEYWORDS", "group,klub,klubtur"),
+        "chat_model": os.getenv("CHAT_MODEL", "gpt-5.5"),
+        "auto_review_model": os.getenv("AUTO_REVIEW_MODEL", "gpt-5.5"),
     }
 
 
@@ -215,10 +215,10 @@ agent = TrainingAgent(
     rhr_max=options.get("rhr_max", 0),
     hard_intervals_per_week=options.get("hard_intervals_per_week", 2),
     block_start_date=options.get("block_start_date", ""),
-    group_ride_keywords=options.get("group_ride_keywords", "group,club,fondo,race"),
+    group_ride_keywords=options.get("group_ride_keywords", "group,klub,klubtur"),
     days_back=options.get("days_back", 28),
-    chat_model=options.get("chat_model", "gpt-5.4"),
-    auto_review_model=options.get("auto_review_model", "gpt-5.4-mini"),
+    chat_model=options.get("chat_model", "gpt-5.5"),
+    auto_review_model=options.get("auto_review_model", "gpt-5.5"),
 )
 
 
