@@ -372,6 +372,8 @@ class TrainingAgent:
         openai_api_key: str,
         intervals_athlete_id: str,
         intervals_api_key: str,
+        max_hours: int = 8,
+        max_tss: int = 500,
         hrv_min: int = 0,
         hrv_max: int = 0,
         rhr_min: int = 0,
@@ -385,6 +387,8 @@ class TrainingAgent:
     ):
         self.openai = OpenAI(api_key=openai_api_key)
         self.icu = IntervalsClient(intervals_athlete_id, intervals_api_key)
+        self.max_hours = max_hours
+        self.max_tss = max_tss
         self.hrv_min = hrv_min
         self.hrv_max = hrv_max
         self.rhr_min = rhr_min
@@ -469,6 +473,7 @@ class TrainingAgent:
 
         # Create a hash of config values to detect changes
         config_key = (
+            self.max_hours, self.max_tss,
             self.hrv_min, self.hrv_max,
             self.rhr_min, self.rhr_max,
             self.hard_intervals_per_week,
@@ -515,6 +520,8 @@ class TrainingAgent:
 
         prompt = SYSTEM_PROMPT.format(
             today=today.isoformat(),
+            max_hours=self.max_hours,
+            max_tss=self.max_tss,
             hrv_context=hrv_context,
             rhr_context=rhr_context,
             block_context=block_context,
