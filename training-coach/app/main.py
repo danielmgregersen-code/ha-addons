@@ -29,19 +29,20 @@ def load_options() -> dict:
     if os.path.exists(OPTIONS_FILE):
         with open(OPTIONS_FILE) as f:
             return json.load(f)
+    # Env-var fallbacks mirror the defaults in config.yaml
     return {
         "openai_api_key": os.getenv("OPENAI_API_KEY", ""),
         "intervals_athlete_id": os.getenv("INTERVALS_ATHLETE_ID", ""),
         "intervals_api_key": os.getenv("INTERVALS_API_KEY", ""),
-        "days_back": int(os.getenv("DAYS_BACK", "14")),
+        "days_back": int(os.getenv("DAYS_BACK", "28")),
         "days_ahead": int(os.getenv("DAYS_AHEAD", "21")),
         "max_hours": int(os.getenv("MAX_HOURS", "8")),
         "max_tss": int(os.getenv("MAX_TSS", "500")),
-        "hrv_min": int(os.getenv("HRV_MIN", "0")),
-        "hrv_max": int(os.getenv("HRV_MAX", "0")),
-        "rhr_min": int(os.getenv("RHR_MIN", "0")),
-        "rhr_max": int(os.getenv("RHR_MAX", "0")),
-        "hard_intervals_per_week": int(os.getenv("HARD_INTERVALS_PER_WEEK", "2")),
+        "hrv_min": int(os.getenv("HRV_MIN", "48")),
+        "hrv_max": int(os.getenv("HRV_MAX", "69")),
+        "rhr_min": int(os.getenv("RHR_MIN", "45")),
+        "rhr_max": int(os.getenv("RHR_MAX", "54")),
+        "hard_intervals_per_week": int(os.getenv("HARD_INTERVALS_PER_WEEK", "3")),
         "block_start_date": os.getenv("BLOCK_START_DATE", ""),
         "group_ride_keywords": os.getenv("GROUP_RIDE_KEYWORDS", "group,klub,klubtur"),
         "chat_model": os.getenv("CHAT_MODEL", "gpt-5.5"),
@@ -213,11 +214,11 @@ agent = TrainingAgent(
     intervals_api_key=options["intervals_api_key"],
     max_hours=options.get("max_hours", 8),
     max_tss=options.get("max_tss", 500),
-    hrv_min=options.get("hrv_min", 0),
-    hrv_max=options.get("hrv_max", 0),
-    rhr_min=options.get("rhr_min", 0),
-    rhr_max=options.get("rhr_max", 0),
-    hard_intervals_per_week=options.get("hard_intervals_per_week", 2),
+    hrv_min=options.get("hrv_min", 48),
+    hrv_max=options.get("hrv_max", 69),
+    rhr_min=options.get("rhr_min", 45),
+    rhr_max=options.get("rhr_max", 54),
+    hard_intervals_per_week=options.get("hard_intervals_per_week", 3),
     block_start_date=options.get("block_start_date", ""),
     group_ride_keywords=options.get("group_ride_keywords", "group,klub,klubtur"),
     days_back=options.get("days_back", 28),
@@ -228,14 +229,15 @@ agent = TrainingAgent(
 
 # ── Background auto-review polling ──
 async def auto_review_loop():
-    last_checked = datetime.now() - timedelta(hours=1)
     print("Auto-review polling started.", flush=True)
     while True:
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
         try:
-            since = last_checked
-            last_checked = datetime.now()
-            new_activities = agent.icu.get_activities_since(since)
+            # Always look back 3 days so an activity with RPE/feel set is caught
+            # even after a restart. The coach_tick check below skips ones we've
+            # already reviewed.
+            since = datetime.now() - timedelta(days=3)
+            new_activities = agent.icu.get_activities_since(since, group_keywords=agent.group_ride_keywords)
             for activity in new_activities:
                 if activity.get("coach_tick"):
                     continue
@@ -358,19 +360,24 @@ def clear_session(session_id: str):
 
 @app.get("/sessions")
 def list_sessions():
+    # Count messages inside the lock without copying full histories — much
+    # cheaper than snapshotting every session's message list on each request.
     with sessions_lock:
-        snapshot = {sid: list(hist) for sid, hist in sessions.items()}
+        counts = {
+            sid: sum(
+                1 for m in hist
+                if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+            )
+            for sid, hist in sessions.items()
+        }
     with session_names_lock:
         names_snapshot = dict(session_names)
     return {
         sid: {
-            "message_count": len([
-                m for m in hist
-                if isinstance(m, dict) and m.get("role") in ("user", "assistant")
-            ]),
+            "message_count": cnt,
             "name": names_snapshot.get(sid, sid),
         }
-        for sid, hist in snapshot.items()
+        for sid, cnt in counts.items()
     }
 
 
@@ -395,8 +402,13 @@ def update_session_name(req: dict):
 
 @app.get("/notifications")
 def get_notifications(since: str = None):
-    """Return notifications, optionally filtered to only those after a timestamp."""
-    all_notifs = list(notifications.values())  # Get notification objects (not keys)
+    """Return notifications, optionally filtered to only those after a timestamp.
+
+    The frontend now de-duplicates on the client side using notification IDs,
+    so the `since` parameter is retained only for backward compatibility.
+    """
+    with notifications_lock:
+        all_notifs = list(notifications.values())
     if since:
         try:
             since_dt = datetime.fromisoformat(since)
@@ -435,7 +447,6 @@ def get_tokens():
 @app.get("/debug/storage")
 def debug_storage():
     """Diagnose where data is being stored and whether files exist."""
-    import os
     return {
         "storage_dir": STORAGE_DIR,
         "storage_dir_exists": os.path.exists(STORAGE_DIR),

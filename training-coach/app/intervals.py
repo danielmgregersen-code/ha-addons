@@ -115,10 +115,6 @@ class IntervalsClient:
         tags = [t.lower() for t in (a.get("tags") or [])]
         return any(kw.lower() in name or kw.lower() in tags for kw in keywords)
 
-    @staticmethod
-    def _strip_nulls(d: dict) -> dict:
-        return {k: v for k, v in d.items() if v is not None}
-
     def _simplify_activity(self, a: dict, group_keywords: list[str] = None) -> dict:
         raw_power_zones = a.get("icu_zone_times")
         raw_hr_zones = a.get("icu_hr_zone_times")
@@ -152,9 +148,6 @@ class IntervalsClient:
             "group_ride": self._is_group_ride(a, group_keywords),
         }
 
-    def get_activity_detail(self, activity_id: str):
-        return self._get(f"/athlete/{self.athlete_id}/activities/{activity_id}")
-
     def get_event(self, event_id: int) -> dict:
         """Fetch a single calendar event (planned workout) by ID."""
         e = self._get(f"/athlete/{self.athlete_id}/events/{event_id}")
@@ -170,10 +163,7 @@ class IntervalsClient:
         }
 
     def get_activity_intervals(self, activity_id: str):
-        try:
-            data = self._get(f"/activity/{activity_id}/intervals")
-        except Exception as e:
-            return {"error": str(e), "activity_id": activity_id}
+        data = self._get(f"/activity/{activity_id}/intervals")
 
         raw_intervals = data.get("icu_intervals", [])
         raw_groups = data.get("icu_groups", [])
@@ -263,10 +253,6 @@ class IntervalsClient:
             payload["coach_tick"] = coach_tick_id
         return self._put(f"/activity/{activity_id}", payload)
 
-    def set_coach_tick(self, activity_id: str, coach_tick_id: int):
-        """Mark an activity as coach-reviewed without changing the description."""
-        return self._put(f"/activity/{activity_id}", {"coach_tick": coach_tick_id})
-
     def create_planned_workout(
         self,
         date: str,
@@ -312,7 +298,6 @@ class IntervalsClient:
 
     def get_upcoming_races(self, days_ahead: int = 120) -> list:
         """Fetch upcoming A-priority race events, sorted by date."""
-        from datetime import datetime, timedelta
         oldest = datetime.now().strftime("%Y-%m-%d")
         newest = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
         events = self._get(

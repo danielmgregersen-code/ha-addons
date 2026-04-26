@@ -245,6 +245,33 @@ TOOLS = [
     },
 ]
 
+AUTO_REVIEW_SYSTEM_PROMPT = """You are an expert cycling coach reviewing a recently completed ride.
+You have direct access to the athlete's training data via Intervals.icu.
+
+Today's date: {today}
+
+Metric reference:
+- feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
+- power_zone_mins: array of minutes in [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
+- hr_zone_mins: array of minutes in [Z1, Z2, Z3, Z4, Z5]
+- decoupling: <5% well-coupled, 5–10% normal, >10% suggests fatigue or heat
+- efficiency_factor: power/HR ratio — higher is more aerobically efficient
+- variability_index: NP/AP — closer to 1.0 means steady effort
+- compliance >0 means the ride matched a planned workout — call get_planned_workout(paired_event_id) to compare actual vs planned
+- group_ride flag indicates the activity matched the group ride keywords
+- Sweet spot ~84–97% FTP overlaps Z3 and Z4 — never count it as a separate zone
+
+FTP: always use the user-configured ftp from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
+
+For MATCHED workouts (compliance > 0): focus on interval execution — did efforts hit targets, how consistent were the reps, power/HR per interval. Cover zone distribution briefly.
+For UNMATCHED rides: equal weight to interval efforts and zone distribution.
+
+When posting via post_activity_comment, always include a coach_tick reflecting session quality:
+1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing — based on TSS vs expected, RPE, feel, interval execution, and decoupling.
+If coach_ticks list is empty, post the comment without a tick_id — never refuse to comment.
+"""
+
+
 SYSTEM_PROMPT = """Act as an expert endurance cycling coach specializing in time-crunched athletes.
 Your goal is to maximize physiological adaptations for an athlete training under {max_hours} hours and under {max_tss} TSS per week.
 Prioritize high-quality, targeted intensity and strict fatigue management over 'junk miles'.
@@ -375,10 +402,10 @@ class TrainingAgent:
         intervals_api_key: str,
         max_hours: int = 8,
         max_tss: int = 500,
-        hrv_min: int = 0,
-        hrv_max: int = 0,
-        rhr_min: int = 0,
-        rhr_max: int = 0,
+        hrv_min: int = 48,
+        hrv_max: int = 69,
+        rhr_min: int = 45,
+        rhr_max: int = 54,
         hard_intervals_per_week: int = 3,
         block_start_date: str = "",
         group_ride_keywords: str = "group,klub,klubtur",
@@ -603,14 +630,20 @@ class TrainingAgent:
                     })
             else:
                 reply = msg.content
-                new_history = messages[1:]
-                new_history.append({"role": "assistant", "content": reply})
+                # Store only the lean conversational record (user + assistant text).
+                # Tool-call internals are not re-sent on subsequent turns, so
+                # persisting them just bloats /data/chat_history.json.
+                new_history = list(trimmed_history) + [
+                    {"role": "user", "content": user_message},
+                    {"role": "assistant", "content": reply},
+                ]
                 return reply, new_history, usage
 
         raise RuntimeError(f"Tool loop exceeded max iterations ({max_iterations}). LLM may be stuck in a loop.")
 
-    def auto_review(self, activity: dict) -> str:
-        """Generate a thorough coach review for a newly uploaded activity."""
+    def auto_review(self, activity: dict) -> tuple[str, dict]:
+        """Generate a coach review for a newly uploaded activity. Returns (comment, token_usage)."""
+        from datetime import date as date_cls
         paired_event_id = activity.get("paired_event_id")
         planned_instruction = (
             f"The activity was matched to a planned workout (paired_event_id={paired_event_id}). "
@@ -630,7 +663,9 @@ class TrainingAgent:
             f"one or two concrete takeaways. End with: 'Ask me for a deeper analysis if you want more detail.' "
             f"Activity summary: {json.dumps(activity)}"
         )
-        system = self._build_system()
+        # Use a dedicated short system prompt — the full chat prompt's planning,
+        # race-phase, and workout-creation rules aren't needed for ride review.
+        system = AUTO_REVIEW_SYSTEM_PROMPT.format(today=date_cls.today().isoformat())
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
@@ -640,7 +675,7 @@ class TrainingAgent:
         max_iterations = 15
         for _ in range(max_iterations):
             response = self.openai.chat.completions.create(
-                model=self.chat_model,
+                model=self.auto_review_model,
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",

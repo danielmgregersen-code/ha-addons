@@ -493,7 +493,10 @@
   }
 
   // ── Notifications ──
-  let lastNotifTime = new Date().toISOString();
+  // Track which notification IDs we've already rendered, so we don't repeat
+  // a card if it stays unseen across multiple polls. Avoids timestamp/timezone
+  // skew between client and server.
+  const shownNotifIds = new Set();
   const notifBanner = document.getElementById('notif-banner');
 
   function showNotification(notif) {
@@ -538,35 +541,19 @@
 
   async function pollNotifications() {
     try {
-      const res = await fetch(`${BASE}/notifications?since=${encodeURIComponent(lastNotifTime)}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data.notifications?.length) {
-        lastNotifTime = new Date().toISOString();
-        data.notifications.forEach(n => {
-          showNotification(n);
-          // Bump unread badge if not currently viewing auto-reviews
-          if (currentSessionId !== AUTO_REVIEW_SESSION) {
-            unreadAutoReviews++;
-            renderSidebar();
-          }
-        });
-      }
-    } catch {}
-  }
-
-  // On load, fetch all unseen notifications to restore missed ones
-  async function loadMissedNotifications() {
-    try {
       const res = await fetch(`${BASE}/notifications`);
       if (!res.ok) return;
       const data = await res.json();
       const unseen = (data.notifications || []).filter(n => !n.seen);
-      unseen.forEach(n => showNotification(n));
-      if (unseen.length && currentSessionId !== AUTO_REVIEW_SESSION) {
-        unreadAutoReviews = unseen.length;
-        renderSidebar();
-      }
+      const newOnes = unseen.filter(n => !shownNotifIds.has(n.id));
+      newOnes.forEach(n => {
+        shownNotifIds.add(n.id);
+        showNotification(n);
+        if (currentSessionId !== AUTO_REVIEW_SESSION) {
+          unreadAutoReviews++;
+          renderSidebar();
+        }
+      });
     } catch {}
   }
 
@@ -609,7 +596,7 @@
     const s = getSessions();
     renderSidebar();
     await switchSession(s[0].id);
-    loadMissedNotifications();
+    pollNotifications();
   })();
 </script>
 </body>
