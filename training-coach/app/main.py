@@ -423,8 +423,12 @@ def health():
 
 @app.get("/tokens")
 def get_tokens():
-    """Return today's token usage totals."""
+    """Return today's token usage totals, resetting in-memory state if the date has rolled over."""
+    today = datetime.now().strftime("%Y-%m-%d")
     with token_usage_lock:
+        if token_usage.get("date") != today:
+            token_usage.clear()
+            token_usage.update({"date": today, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
         return dict(token_usage)
 
 
