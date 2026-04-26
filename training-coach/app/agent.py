@@ -327,10 +327,11 @@ Main set 3x
 Cooldown
 - Cooldown Press lap 10m 50-65%
 
-For sweet spot work, use 88-92% rather than a zone label. Always structure workouts with Warmup / Main set / Cooldown sections. Use raw percentages or watt values rather than zone notation — fixed values (e.g. 75%, 250w) or ranges (e.g. 70-80%, 240-260w) are both fine. Include cadence guidance for key efforts
+
+- For sweet spot work, use 88-92% rather than a zone label. Always structure workouts with Warmup / Main set / Cooldown sections. Use raw percentages or watt values rather than zone notation — fixed values (e.g. 75%, 250w) or ranges (e.g. 70-80%, 240-260w) are both fine. Include cadence guidance for key efforts
 - Consider cumulative fatigue before adding hard sessions
 - Confirm with the athlete before making changes to the calendar
-- Fueling plan: whenever you plan a workout, always include a fueling recommendation in your reply (not in the Intervals.icu description). Use duration as the baseline and intensity as the multiplier:
+- Fueling plan: whenever you plan or update a workout, always include a fueling recommendation in the reply and Intervals.icu description (should be the first item in the description). Use duration as the baseline and intensity as the multiplier:
   Duration baseline (carbs/hr on the bike):
   * Under 1 h: 0–30 g/hr — internal glycogen stores are sufficient; water or a light electrolyte mix is enough, no food required
   * 1.0–2.5 h: 30–60 g/hr — glycogen starts to deplete, introduce exogenous carbohydrates to spare muscle glycogen
