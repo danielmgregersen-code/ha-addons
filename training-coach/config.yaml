@@ -1,6 +1,6 @@
 name: "Training Coach"
 description: "AI coaching agent connected to your Intervals.icu training data."
-version: "1.1.50"
+version: "1.1.51"
 slug: "training_coach"
 init: false
 arch:
@@ -44,6 +44,8 @@ schema:
   intervals_api_key: str
   days_back: int
   days_ahead: int
+  max_hours: int
+  max_tss: int
   hrv_min: int
   hrv_max: int
   rhr_min: int
