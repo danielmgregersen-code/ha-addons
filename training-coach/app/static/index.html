@@ -468,6 +468,27 @@
   inputEl.addEventListener('input', () => { inputEl.style.height = 'auto'; inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px'; });
   inputEl.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
 
+  // Poll /history for a recovered assistant reply after a network error.
+  // Used when the ingress proxy kills a long-running /chat request before
+  // the backend has time to respond — the reply is still persisted server-side.
+  async function pollForReply(sessionId, baseline, maxSeconds = 180, intervalMs = 5000) {
+    const deadline = Date.now() + maxSeconds * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, intervalMs));
+      try {
+        const res = await fetch(`${BASE}/history/${sessionId}`);
+        if (!res.ok) continue;
+        const data = await res.json();
+        const msgs = data.messages || [];
+        const last = msgs[msgs.length - 1];
+        if (msgs.length >= baseline + 2 && last?.role === 'assistant' && last.content) {
+          return last.content;
+        }
+      } catch {}
+    }
+    return null;
+  }
+
   async function send() {
     if (busy || !currentSessionId) return;
     const text = inputEl.value.trim();
@@ -476,6 +497,18 @@
     inputEl.value = ''; inputEl.style.height = 'auto';
     addMessage('user', text);
     showThinking();
+
+    // Snapshot history length so we can detect a recovered reply if the
+    // network call fails mid-flight.
+    let historyBaseline = null;
+    try {
+      const histRes = await fetch(`${BASE}/history/${currentSessionId}`);
+      if (histRes.ok) {
+        const histData = await histRes.json();
+        historyBaseline = (histData.messages || []).length;
+      }
+    } catch {}
+
     try {
       const res = await fetch(`${BASE}/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -488,7 +521,20 @@
       }
       const data = await res.json();
       hideThinking(); addMessage('coach', data.reply); refreshTokens();
-    } catch(e) { hideThinking(); addMessage('coach', `⚠ Error: ${e.message}`); }
+    } catch(e) {
+      // TypeError typically means the connection was killed (e.g. ingress
+      // proxy timeout). The backend may have completed and persisted the
+      // reply — poll /history to recover it.
+      const isNetworkError = e instanceof TypeError;
+      if (isNetworkError && historyBaseline !== null) {
+        const reply = await pollForReply(currentSessionId, historyBaseline);
+        if (reply) {
+          hideThinking(); addMessage('coach', reply); refreshTokens();
+          return;
+        }
+      }
+      hideThinking(); addMessage('coach', `⚠ Error: ${e.message}`);
+    }
     finally { busy = false; sendBtn.disabled = false; inputEl.focus(); messagesEl.scrollTop = messagesEl.scrollHeight; }
   }
 
