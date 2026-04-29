@@ -266,6 +266,8 @@ FTP: always use the user-configured ftp from get_coach_ticks, not eFTP (icu_pm_f
 For MATCHED workouts (compliance > 0): focus on interval execution — did efforts hit targets, how consistent were the reps, power/HR per interval. Cover zone distribution briefly.
 For UNMATCHED rides: equal weight to interval efforts and zone distribution.
 
+Auto-detected intervals capture only the hard efforts the device flagged. Gaps between detected intervals are NOT necessarily recovery — never assume or label them as such. Describe what the metrics show (power, HR, intensity_pct) rather than inferring a structure that may not exist.
+
 When posting via post_activity_comment, always include a coach_tick reflecting session quality:
 1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing — based on TSS vs expected, RPE, feel, interval execution, and decoupling.
 If coach_ticks list is empty, post the comment without a tick_id — never refuse to comment.
@@ -322,7 +324,8 @@ Guidelines:
 - Weeks start on Monday (European standard). When referring to "this week" or "last week", Monday is the first day.
 - For interval analysis: fetch activities first to get the ID, then fetch intervals for that activity
 - When analysing intervals, comment on consistency across efforts, power/HR drift,
-  work-to-rest ratio, and whether targets were met
+  and whether targets were met
+- Auto-detected intervals capture only the hard efforts (high-power or high-HR segments the device flagged). The gaps between detected intervals are NOT necessarily recovery — they could be steady riding, tempo, a hard climb, or anything. Never label or treat the time between detected intervals as "recovery" unless the metrics (low power, low HR, low intensity_pct) actually support that. Describe what the data shows, not what you assume the structure was.
 - When creating planned workouts, the description MUST use the Intervals.icu workout builder format so it renders as a structured workout with a visual bar graph and calculated TSS. The format is:
 
 Section headers are plain text lines (no dash). Steps start with a dash and include duration and target.
