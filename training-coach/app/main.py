@@ -233,11 +233,13 @@ async def auto_review_loop():
     while True:
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
         try:
-            # Always look back 3 days so an activity with RPE/feel set is caught
-            # even after a restart. The coach_tick check below skips ones we've
-            # already reviewed.
-            since = datetime.now() - timedelta(days=3)
-            new_activities = agent.icu.get_activities_since(since, group_keywords=agent.group_ride_keywords)
+            # Use get_activities (queries by activity date) rather than
+            # get_activities_since (filters by upload timestamp). This catches
+            # rides where RPE/feel was added days after the initial upload —
+            # those are invisible to upload-time filtering.
+            # 14 days covers the typical case of someone adding RPE a week late.
+            # The coach_tick check below prevents re-reviewing already-done rides.
+            new_activities = agent.icu.get_activities(days_back=14, group_keywords=agent.group_ride_keywords)
             for activity in new_activities:
                 if activity.get("coach_tick"):
                     continue

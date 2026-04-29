@@ -546,7 +546,8 @@
   const notifBanner = document.getElementById('notif-banner');
 
   function showNotification(notif) {
-    const preview = notif.comment.length > 120 ? notif.comment.slice(0, 120) + '…' : notif.comment;
+    const isError = notif.type === 'auto_review_error';
+    const preview = (notif.comment || '').length > 120 ? notif.comment.slice(0, 120) + '…' : (notif.comment || '');
     const card = document.createElement('div');
     card.className = 'notif-card';
     card.dataset.id = notif.id;
@@ -554,18 +555,18 @@
     card.dataset.activityName = notif.activity_name;
     card.innerHTML = `
       <div class="notif-header">
-        <span>⚡ Auto-review — ${escapeHtml(notif.activity_date)}</span>
+        <span>${isError ? '⚠ Auto-review failed' : '⚡ Auto-review'} — ${escapeHtml(notif.activity_date)}</span>
         <button class="notif-dismiss">×</button>
       </div>
       <div class="notif-title">${escapeHtml(notif.activity_name)}</div>
       <div class="notif-preview">${escapeHtml(preview)}</div>
       <div class="notif-btns">
-        <button class="notif-btn primary">More detail</button>
+        ${isError ? '' : '<button class="notif-btn primary">More detail</button>'}
         <button class="notif-btn">Dismiss</button>
       </div>
     `;
     card.querySelector('.notif-dismiss').addEventListener('click', () => dismissNotif(notif.id));
-    card.querySelector('.notif-btn.primary').addEventListener('click', () => askMoreDetail(card.dataset.activityId, card.dataset.activityName, notif.id));
+    if (!isError) card.querySelector('.notif-btn.primary').addEventListener('click', () => askMoreDetail(card.dataset.activityId, card.dataset.activityName, notif.id));
     card.querySelector('.notif-btn:not(.primary)').addEventListener('click', () => dismissNotif(notif.id));
     notifBanner.appendChild(card);
     // Auto-dismiss after 60 seconds
