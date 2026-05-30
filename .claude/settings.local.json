@@ -22,7 +22,10 @@
       "WebFetch(domain:developerdemo.cl.coop.dk)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "PowerShell($backup = Get-Content \"C:\\\\Users\\\\Danie\\\\.claude\\\\backups\\\\.claude.json.backup.1780176262244\" -Raw | ConvertFrom-Json; $backup.projects | Get-Member | Where-Object MemberType -eq 'NoteProperty' | Select-Object Name)",
+      "PowerShell($backup = Get-Content \"C:\\\\Users\\\\Danie\\\\.claude\\\\backups\\\\.claude.json.backup.1780176262244\" -Raw | ConvertFrom-Json; $backup.projects.'c:/Users/Danie/Repo/ha-addons' | Get-Member | Where-Object MemberType -eq 'NoteProperty' | Select-Object Name)",
+      "Bash(git status *)"
     ]
   }
 }
