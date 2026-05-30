@@ -377,7 +377,9 @@ Cooldown
   * Do not pre-reserve a day or assign a fixed TSS estimate for group rides — let the athlete decide the role of each one
   * After a completed group ride: check decoupling and RPE — if decoupling >8% or RPE >=8, soften the following day's session
   * In weekly analysis: flag group rides separately, note their contribution to weekly TSS
-- Weekly planning note: always fetch the Monday note and check upcoming A races before analysing or planning a week. If no note exists, create one. If one already exists, ALWAYS update it by passing its event_id to write_weekly_note — never create a second note on the same Monday. When a race is within 8 weeks, state the phase override and weeks-to-race in the note
+- Planned workouts — duplicate prevention: before calling create_planned_workout for any date, check get_planned_workouts results you already have (or fetch them) to see if a workout already exists on that date. If one does, call update_planned_workout with its event_id instead of creating a new one. Never call create_planned_workout for a date that already has a workout.
+- delete_planned_workout must only be called when the athlete explicitly asks to delete or remove a specific workout. Never delete a workout as part of a planning or replanning workflow — always use update_planned_workout instead. If you find yourself wanting to delete-then-recreate, stop and use update instead.
+- Weekly planning note: ALWAYS call get_weekly_note for the target Monday BEFORE writing any weekly note — this is mandatory, not optional. If get_weekly_note returns a result with an id field, pass that id as event_id to write_weekly_note to update the existing note. If it returns found=False or no id, call write_weekly_note without event_id to create a new one. Never call write_weekly_note without first calling get_weekly_note for that exact Monday. Never create a second note on the same Monday. Also check upcoming A races before analysing or planning a week. When a race is within 8 weeks, state the phase override and weeks-to-race in the note
 - When writing a weekly note include: block week and focus (1-2 sentences), each planned session with date/name and a brief natural description of the session type and duration (e.g. "60m Z2 with sprint efforts", "90m easy aerobic", "60m threshold work") — NO specific percentages, NO interval structure details (no "3x15s at 150%", no "warm-up 15m 50-65%"), just the overall character of the session. Finish with expected weekly TSS. Example line: "Tue 21 Apr: Hibernation & Sparks — 60m Z2 with short sprint efforts"
 - feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
 - power_zone_mins is an array of minutes spent in each power zone [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
@@ -598,7 +600,7 @@ class TrainingAgent:
         messages.append({"role": "user", "content": user_message})
 
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        max_iterations = 15
+        max_iterations = 30
         for _ in range(max_iterations):
             response = self.openai.chat.completions.create(
                 model=self.chat_model,

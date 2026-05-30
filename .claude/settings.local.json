@@ -4,7 +4,25 @@
       "Bash(\"/c/Users/Danie/AppData/Local/Programs/Microsoft VS Code/Code.exe\" --new-window \"c:/Users/Danie/Repo/workspace.code-workspace\")",
       "Bash(git -C \"c:/Users/Danie/Repo/NutriSnap\" status)",
       "Bash(git -C \"c:/Users/Danie/Repo/NutriSnap\" diff)",
-      "Bash(git -C \"c:/Users/Danie/Repo/NutriSnap\" remote -v)"
+      "Bash(git -C \"c:/Users/Danie/Repo/NutriSnap\" remote -v)",
+      "WebSearch",
+      "WebFetch(domain:www.lidl.dk)",
+      "WebFetch(domain:www.lovbjerg.dk)",
+      "WebFetch(domain:www.rema1000.dk)",
+      "WebFetch(domain:cphapp.rema1000.dk)",
+      "WebFetch(domain:etilbudsavis.dk)",
+      "WebFetch(domain:developer.sallinggroup.com)",
+      "WebFetch(domain:developer.sallinggroup.dev)",
+      "WebFetch(domain:prod-oas-website.azurewebsites.net)",
+      "WebFetch(domain:api.tilbudsdata.dk)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:developer.cl.coop.dk)",
+      "WebFetch(domain:developerdemo.cl.coop.dk)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }
