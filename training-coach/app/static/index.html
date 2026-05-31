@@ -246,6 +246,9 @@
   let activeMode = localStorage.getItem('activeMode') || 'review';
 
   const AUTO_REVIEW_SESSION = 'auto-reviews';
+  const WEEKLY_RECAP_SESSION = 'auto-weekly-recap';
+  const WELLNESS_SESSION = 'auto-wellness-check';
+  const SPECIAL_SESSIONS = new Set([AUTO_REVIEW_SESSION, WEEKLY_RECAP_SESSION, WELLNESS_SESSION]);
 
   // ── Mode helpers ──
 
@@ -254,13 +257,14 @@
   }
 
   function isKnownModeId(id) {
-    return id.startsWith('review-') || id.startsWith('health-') || id.startsWith('plan-') || id === AUTO_REVIEW_SESSION;
+    return id.startsWith('review-') || id.startsWith('health-') || id.startsWith('plan-') || SPECIAL_SESSIONS.has(id);
   }
 
   function getSessionsForMode(mode) {
     const prefix = getModePrefix(mode) + '-';
     return getSessions().filter(s => {
-      if (mode === 'review') return s.id.startsWith(prefix) || s.id === AUTO_REVIEW_SESSION || !isKnownModeId(s.id);
+      if (mode === 'review') return s.id.startsWith(prefix) || s.id === AUTO_REVIEW_SESSION || s.id === WEEKLY_RECAP_SESSION || !isKnownModeId(s.id);
+      if (mode === 'health') return s.id.startsWith(prefix) || s.id === WELLNESS_SESSION;
       return s.id.startsWith(prefix);
     });
   }
@@ -279,7 +283,7 @@
 
   // ── Tab bar ──
 
-  let unreadAutoReviews = 0;
+  const unreadByTab = { review: 0, health: 0 };
 
   function renderTabs() {
     const modes = [
@@ -288,8 +292,9 @@
       { id: 'planning', label: 'Planning' },
     ];
     tabBarEl.innerHTML = modes.map(m => {
-      const badge = (m.id === 'review' && unreadAutoReviews > 0 && activeMode !== 'review')
-        ? `<span class="tab-badge">${unreadAutoReviews}</span>` : '';
+      const count = unreadByTab[m.id] || 0;
+      const badge = (count > 0 && activeMode !== m.id)
+        ? `<span class="tab-badge">${count}</span>` : '';
       return `<button class="tab${activeMode === m.id ? ' active' : ''}" onclick="switchMode('${m.id}')">${m.label}${badge}</button>`;
     }).join('');
   }
@@ -298,6 +303,8 @@
     if (mode === activeMode && currentSessionId) return;
     activeMode = mode;
     localStorage.setItem('activeMode', mode);
+    // Reset tab badge when entering the tab
+    if (unreadByTab[mode] !== undefined) unreadByTab[mode] = 0;
     renderTabs();
 
     const sessions = ensureSessionForMode(mode);
@@ -323,7 +330,13 @@
     if (!s.find(x => x.id === AUTO_REVIEW_SESSION)) {
       s.push({ id: AUTO_REVIEW_SESSION, name: '⚡ Auto-reviews' });
     }
-    if (!s.find(x => !isKnownModeId(x.id) || x.id.startsWith('review-') || x.id === AUTO_REVIEW_SESSION)) {
+    if (!s.find(x => x.id === WEEKLY_RECAP_SESSION)) {
+      s.push({ id: WEEKLY_RECAP_SESSION, name: '📊 Weekly recaps' });
+    }
+    if (!s.find(x => x.id === WELLNESS_SESSION)) {
+      s.push({ id: WELLNESS_SESSION, name: '❤️ Wellness checks' });
+    }
+    if (!s.find(x => !isKnownModeId(x.id) || x.id.startsWith('review-') || x.id === AUTO_REVIEW_SESSION || x.id === WEEKLY_RECAP_SESSION)) {
       s.unshift({ id: 'review-default', name: 'General' });
     }
     saveSessions(s);
@@ -346,7 +359,7 @@
       let changed = false;
 
       for (const [id, meta] of Object.entries(serverSessions)) {
-        if (!localIds.has(id) && id !== AUTO_REVIEW_SESSION) {
+        if (!localIds.has(id) && !SPECIAL_SESSIONS.has(id)) {
           const name = serverNames[id] || meta.name || id;
           local.push({ id, name });
           changed = true;
@@ -369,23 +382,27 @@
 
   // ── Sidebar ──
 
+  // Per-session unread counts (for sidebar badges on special sessions)
+  const unreadBySession = {};
+
   function renderSidebar() {
     sessionListEl.innerHTML = '';
     getSessionsForMode(activeMode).forEach(s => {
-      const isAuto = s.id === AUTO_REVIEW_SESSION;
+      const isSpecial = SPECIAL_SESSIONS.has(s.id);
       const el = document.createElement('div');
-      el.className = 'session-item' + (s.id === currentSessionId ? ' active' : '') + (isAuto ? ' auto-reviews' : '');
-      const badge = (isAuto && unreadAutoReviews > 0 && s.id !== currentSessionId)
-        ? `<span class="session-badge">${unreadAutoReviews}</span>` : '';
-      const deleteBtn = isAuto ? '' : `<button class="session-delete" title="Delete" data-id="${s.id}">×</button>`;
-      el.innerHTML = `<span class="session-name" title="${isAuto ? '' : 'Double-click to rename'}">${escapeHtml(s.name)}</span>${badge}${deleteBtn}`;
+      el.className = 'session-item' + (s.id === currentSessionId ? ' active' : '') + (s.id === AUTO_REVIEW_SESSION ? ' auto-reviews' : '');
+      const sessionUnread = (unreadBySession[s.id] || 0);
+      const badge = (sessionUnread > 0 && s.id !== currentSessionId)
+        ? `<span class="session-badge">${sessionUnread}</span>` : '';
+      const deleteBtn = isSpecial ? '' : `<button class="session-delete" title="Delete" data-id="${s.id}">×</button>`;
+      el.innerHTML = `<span class="session-name" title="${isSpecial ? '' : 'Double-click to rename'}">${escapeHtml(s.name)}</span>${badge}${deleteBtn}`;
       el.addEventListener('click', e => {
         if (!e.target.classList.contains('session-delete') && !e.target.classList.contains('session-name-input')) {
-          if (isAuto) unreadAutoReviews = 0;
+          if (isSpecial) unreadBySession[s.id] = 0;
           switchSession(s.id);
         }
       });
-      if (!isAuto) {
+      if (!isSpecial) {
         el.querySelector('.session-delete')?.addEventListener('click', () => deleteSession(s.id));
         el.querySelector('.session-name').addEventListener('dblclick', e => { e.stopPropagation(); startRename(s.id, el); });
       }
@@ -663,28 +680,52 @@
   const shownNotifIds = new Set();
   const notifBanner = document.getElementById('notif-banner');
 
+  // Maps notification type → { tab, session, header, primaryLabel, targetMode }
+  const NOTIF_CONFIG = {
+    auto_review:       { tab: 'review', session: AUTO_REVIEW_SESSION,    header: '⚡ Auto-review',    primaryLabel: 'More detail', targetMode: 'review' },
+    auto_review_error: { tab: 'review', session: AUTO_REVIEW_SESSION,    header: '⚠ Auto-review failed', primaryLabel: null,         targetMode: 'review' },
+    weekly_recap:      { tab: 'review', session: WEEKLY_RECAP_SESSION,   header: '📊 Weekly recap',   primaryLabel: 'View recap',  targetMode: 'review' },
+    wellness_alert:    { tab: 'health', session: WELLNESS_SESSION,       header: '⚠ Wellness alert',  primaryLabel: 'View in Health', targetMode: 'health' },
+  };
+
   function showNotification(notif) {
-    const isError = notif.type === 'auto_review_error';
+    const cfg = NOTIF_CONFIG[notif.type];
+    if (!cfg) return; // wellness_ok and unknown types are silent
     const preview = (notif.comment || '').length > 120 ? notif.comment.slice(0, 120) + '…' : (notif.comment || '');
     const card = document.createElement('div');
     card.className = 'notif-card';
     card.dataset.id = notif.id;
-    card.dataset.activityId = notif.activity_id;
-    card.dataset.activityName = notif.activity_name;
+    card.dataset.activityId = notif.activity_id || '';
+    card.dataset.activityName = notif.activity_name || '';
+    card.dataset.targetMode = cfg.targetMode;
+    card.dataset.targetSession = cfg.session;
     card.innerHTML = `
       <div class="notif-header">
-        <span>${isError ? '⚠ Auto-review failed' : '⚡ Auto-review'} — ${escapeHtml(notif.activity_date)}</span>
+        <span>${cfg.header} — ${escapeHtml(notif.activity_date)}</span>
         <button class="notif-dismiss">×</button>
       </div>
-      <div class="notif-title">${escapeHtml(notif.activity_name)}</div>
+      <div class="notif-title">${escapeHtml(notif.activity_name || '')}</div>
       <div class="notif-preview">${escapeHtml(preview)}</div>
       <div class="notif-btns">
-        ${isError ? '' : '<button class="notif-btn primary">More detail</button>'}
+        ${cfg.primaryLabel ? `<button class="notif-btn primary">${cfg.primaryLabel}</button>` : ''}
         <button class="notif-btn">Dismiss</button>
       </div>
     `;
     card.querySelector('.notif-dismiss').addEventListener('click', () => dismissNotif(notif.id));
-    if (!isError) card.querySelector('.notif-btn.primary').addEventListener('click', () => askMoreDetail(card.dataset.activityId, card.dataset.activityName, notif.id));
+    if (cfg.primaryLabel) {
+      card.querySelector('.notif-btn.primary').addEventListener('click', () => {
+        const t = card.dataset;
+        if (notif.type === 'auto_review') {
+          askMoreDetail(t.activityId, t.activityName, notif.id);
+        } else {
+          dismissNotif(notif.id);
+          const targetMode = t.targetMode;
+          if (activeMode !== targetMode) {
+            switchMode(targetMode);
+          }
+        }
+      });
+    }
     card.querySelector('.notif-btn:not(.primary)').addEventListener('click', () => dismissNotif(notif.id));
     notifBanner.appendChild(card);
     setTimeout(() => dismissNotif(notif.id), 60000);
@@ -716,11 +757,18 @@
       const newOnes = unseen.filter(n => !shownNotifIds.has(n.id));
       newOnes.forEach(n => {
         shownNotifIds.add(n.id);
+        const cfg = NOTIF_CONFIG[n.type];
+        if (!cfg) return;
         showNotification(n);
-        if (currentSessionId !== AUTO_REVIEW_SESSION) {
-          unreadAutoReviews++;
-          renderSidebar();
+        // Increment tab badge if not currently viewing the destination tab
+        if (cfg.tab && activeMode !== cfg.tab) {
+          unreadByTab[cfg.tab] = (unreadByTab[cfg.tab] || 0) + 1;
           renderTabs();
+        }
+        // Increment session badge if not currently viewing the destination session
+        if (cfg.session && currentSessionId !== cfg.session) {
+          unreadBySession[cfg.session] = (unreadBySession[cfg.session] || 0) + 1;
+          renderSidebar();
         }
       });
     } catch {}

@@ -2,6 +2,7 @@ import json
 import os
 import asyncio
 import threading
+import requests
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
@@ -22,7 +23,12 @@ TOKEN_USAGE_FILE = f"{STORAGE_DIR}/token_usage.json"
 MAX_HISTORY_MESSAGES = 200
 MAX_NOTIFICATIONS = 100
 POLL_INTERVAL_SECONDS = 120
-AUTO_REVIEW_SESSION = "auto-reviews"  # Fixed session for auto-review history
+AUTO_REVIEW_SESSION = "auto-reviews"
+WEEKLY_RECAP_SESSION = "auto-weekly-recap"
+WELLNESS_SESSION = "auto-wellness-check"
+WEEKLY_RECAP_STATE_FILE = f"{STORAGE_DIR}/weekly_recap_state.json"
+WELLNESS_STATE_FILE = f"{STORAGE_DIR}/wellness_state.json"
+AUTOMATION_POLL_SECONDS = 600  # 10-minute check interval for scheduled automations
 
 
 def load_options() -> dict:
@@ -47,6 +53,7 @@ def load_options() -> dict:
         "group_ride_keywords": os.getenv("GROUP_RIDE_KEYWORDS", "group,klub,klubtur"),
         "chat_model": os.getenv("CHAT_MODEL", "gpt-5.5"),
         "auto_review_model": os.getenv("AUTO_REVIEW_MODEL", "gpt-5.5"),
+        "ha_notification_target": os.getenv("HA_NOTIFICATION_TARGET", ""),
     }
 
 
@@ -130,21 +137,18 @@ def accumulate_tokens(usage: dict):
         save_token_usage(token_usage)
 
 
-def append_to_auto_review_session(sessions: dict, activity_name: str, activity_date: str, comment: str):
-    """Add an auto-review comment to the dedicated auto-reviews session."""
-    history = sessions.get(AUTO_REVIEW_SESSION, [])
-    # Add a synthetic user message as context, then the coach reply
-    history.append({
-        "role": "user",
-        "content": f"[Auto-review] {activity_name} — {activity_date}",
-    })
-    history.append({
-        "role": "assistant",
-        "content": comment,
-    })
+def append_to_session(sessions: dict, session_id: str, label: str, content: str):
+    """Append a synthetic user label + assistant reply to any named session."""
+    history = sessions.get(session_id, [])
+    history.append({"role": "user", "content": label})
+    history.append({"role": "assistant", "content": content})
     if len(history) > MAX_HISTORY_MESSAGES:
         history = history[-MAX_HISTORY_MESSAGES:]
-    sessions[AUTO_REVIEW_SESSION] = history
+    sessions[session_id] = history
+
+
+def append_to_auto_review_session(sessions: dict, activity_name: str, activity_date: str, comment: str):
+    append_to_session(sessions, AUTO_REVIEW_SESSION, f"[Auto-review] {activity_name} — {activity_date}", comment)
 
 
 options = load_options()
@@ -227,6 +231,103 @@ agent = TrainingAgent(
 )
 
 
+# ── HA push notification helper ──
+async def send_ha_notification(title: str, message: str):
+    """Send a push notification via the HA Supervisor API. No-op if not configured."""
+    token = os.getenv("SUPERVISOR_TOKEN")
+    target = options.get("ha_notification_target", "").strip()
+    if not token or not target:
+        return
+    url = f"http://supervisor/core/api/services/notify/{target}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {"title": title, "message": message}
+    try:
+        await asyncio.to_thread(requests.post, url, headers=headers, json=payload, timeout=10)
+    except Exception as e:
+        print(f"HA notification failed: {e}", flush=True)
+
+
+# ── Weekly recap loop ──
+async def weekly_recap_loop():
+    print("Weekly recap loop started.", flush=True)
+    while True:
+        await asyncio.sleep(AUTOMATION_POLL_SECONDS)
+        try:
+            now = datetime.now()
+            if now.weekday() != 0 or now.hour < 8:  # 0 = Monday
+                continue
+            monday = now.strftime("%Y-%m-%d")
+            state = _load_json_file(WEEKLY_RECAP_STATE_FILE, {})
+            if state.get("last_date") == monday:
+                continue
+            print(f"Generating weekly recap for {monday}", flush=True)
+            recap, usage = agent.weekly_recap()
+            accumulate_tokens(usage)
+            with sessions_lock:
+                append_to_session(sessions, WEEKLY_RECAP_SESSION, f"[Weekly recap] {monday}", recap)
+                sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
+            notif = {
+                "id": f"recap-{monday}",
+                "timestamp": now.isoformat(),
+                "activity_name": f"Week of {monday}",
+                "activity_date": monday,
+                "comment": recap,
+                "type": "weekly_recap",
+                "seen": False,
+            }
+            with notifications_lock:
+                notifications[notif["id"]] = notif
+                save_notifications(notifications)
+            preview = recap[:200].rstrip()
+            await send_ha_notification("Weekly Training Recap", preview)
+            _save_json_file(WEEKLY_RECAP_STATE_FILE, {"last_date": monday}, "could not save weekly recap state")
+            print(f"Weekly recap done for {monday}", flush=True)
+        except Exception as e:
+            print(f"Weekly recap error: {e}", flush=True)
+
+
+# ── Daily wellness check loop ──
+async def wellness_check_loop():
+    print("Wellness check loop started.", flush=True)
+    while True:
+        await asyncio.sleep(AUTOMATION_POLL_SECONDS)
+        try:
+            now = datetime.now()
+            if now.hour < 7:
+                continue
+            today = now.strftime("%Y-%m-%d")
+            state = _load_json_file(WELLNESS_STATE_FILE, {})
+            if state.get("last_date") == today:
+                continue
+            print(f"Running wellness check for {today}", flush=True)
+            message, is_alert, usage = agent.wellness_check()
+            accumulate_tokens(usage)
+            label = f"[Wellness check] {today}"
+            with sessions_lock:
+                append_to_session(sessions, WELLNESS_SESSION, label, message)
+                sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
+            notif_type = "wellness_alert" if is_alert else "wellness_ok"
+            notif = {
+                "id": f"wellness-{today}",
+                "timestamp": now.isoformat(),
+                "activity_name": f"Wellness check — {today}",
+                "activity_date": today,
+                "comment": message,
+                "type": notif_type,
+                "seen": False,
+            }
+            with notifications_lock:
+                notifications[notif["id"]] = notif
+                save_notifications(notifications)
+            if is_alert:
+                preview = message.replace("[ALERT]", "").strip()[:200]
+                await send_ha_notification("⚠ Wellness Alert", preview)
+            _save_json_file(WELLNESS_STATE_FILE, {"last_date": today}, "could not save wellness state")
+            print(f"Wellness check done for {today} (alert={is_alert})", flush=True)
+        except Exception as e:
+            print(f"Wellness check error: {e}", flush=True)
+
+
 # ── Background auto-review polling ──
 async def auto_review_loop():
     print("Auto-review polling started.", flush=True)
@@ -284,15 +385,16 @@ async def auto_review_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(auto_review_loop())
+    t1 = asyncio.create_task(auto_review_loop())
+    t2 = asyncio.create_task(weekly_recap_loop())
+    t3 = asyncio.create_task(wellness_check_loop())
     yield
-    # On shutdown: cancel auto-review loop and flush pending saves
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-    # Flush any pending debounced saves
+    for t in [t1, t2, t3]:
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
     sessions_debouncer.flush()
 
 

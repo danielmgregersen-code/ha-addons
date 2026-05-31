@@ -1,6 +1,6 @@
 name: "Training Coach"
 description: "AI coaching agent connected to your Intervals.icu training data."
-version: "1.1.57"
+version: "1.1.58"
 slug: "training_coach"
 init: false
 arch:
@@ -37,6 +37,7 @@ options:
   group_ride_keywords: "group,klub,klubtur"
   chat_model: "gpt-5.5"
   auto_review_model: "gpt-5.5"
+  ha_notification_target: ""
 
 schema:
   openai_api_key: str
@@ -55,6 +56,9 @@ schema:
   group_ride_keywords: str
   chat_model: str
   auto_review_model: str
+  ha_notification_target: str
+
+homeassistant_api: true
 
 startup: application
 boot: auto

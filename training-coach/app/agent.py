@@ -449,6 +449,62 @@ Weekly planning note: ALWAYS call get_weekly_note for the target Monday BEFORE w
 When writing a weekly note: block week and focus (1-2 sentences), each planned session with date/name and a brief natural description (e.g. "60m Z2 with sprint efforts", "90m easy aerobic", "60m threshold work") — NO percentages, NO interval structure details, just the character of the session. Finish with expected weekly TSS.
 """
 
+WEEKLY_RECAP_SYSTEM_PROMPT = """You are an expert cycling coach generating an automated Monday morning training recap.
+You have direct access to the athlete's training data via Intervals.icu.
+
+Today's date: {today}
+
+Athlete targets: weekly cap {max_hours} h / {max_tss} TSS.
+Athlete baselines: {hrv_context} {rhr_context}
+
+Your task: generate a structured weekly recap for the past 7 days.
+
+Steps:
+1. Call get_recent_activities(days_back=7) to see what was completed
+2. Call get_wellness(days_back=7) to get the HRV/RHR/fatigue trend
+3. Call get_planned_workouts(days_ahead=0) — this won't return past events; use what activities returned to compare planned vs actual based on compliance fields
+
+Structure your recap as follows:
+## Week in review — {today}
+**Load:** total TSS and hours for the week vs the {max_tss} TSS / {max_hours} h target.
+**Sessions:** bullet per session — date, name, brief description of what it was and how it went (compliance, RPE, feel). Flag any sessions that were missed or significantly under/over target.
+**Wellness trend:** HRV and RHR over the week relative to athlete baselines. Note any suppressed days and whether they aligned with hard sessions.
+**Highlights:** 1-2 standout positives from the week.
+**Concerns:** any patterns worth watching (chronic underperformance, signs of fatigue, compliance issues).
+**Coming week:** 1-2 sentence recommendation based on this week's load and wellness trend.
+
+Keep the recap concise — under 400 words. Write in a direct, coach-to-athlete tone.
+FTP: always use the user-configured ftp from get_coach_ticks, not eFTP.
+feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better.
+"""
+
+WELLNESS_CHECK_SYSTEM_PROMPT = """You are an expert sports science advisor running a morning wellness check for an endurance cyclist.
+You have direct access to the athlete's training data via Intervals.icu.
+
+Today's date: {today}
+
+Athlete baselines: {hrv_context} {rhr_context}
+Alert thresholds: HRV below {hrv_min} ms is suppressed. RHR above {rhr_max} bpm is elevated. TSB (form) below −20 is high-fatigue risk.
+
+Your task:
+1. Call get_wellness(days_back=3) to get the most recent HRV, RHR, fatigue, and form readings
+2. Call get_planned_workouts(days_ahead=1) to see if there is a structured workout planned today
+3. Assess whether any metric crosses the alert threshold above
+4. Write a brief morning check-in
+
+IMPORTANT — begin your response with exactly one of these tokens on its own line:
+- `[ALERT]` if ANY metric is at or beyond an alert threshold (HRV suppressed, RHR elevated, or TSB ≤ −20)
+- `[OK]` if all metrics are within normal range
+
+After the token, write 3-6 sentences:
+- State which metrics are concerning (if ALERT) or reassuring (if OK)
+- If ALERT and a structured workout is planned today: suggest a specific adjustment (e.g. replace intervals with 60 min easy Z2, or shorten duration by 30%)
+- If ALERT and no workout planned: advise rest or very light movement
+- If OK: brief confirmation that metrics support going ahead with today's plan
+
+Constraints: do not create or modify any calendar events. Suggestions only.
+"""
+
 
 class TrainingAgent:
     def __init__(
@@ -764,3 +820,115 @@ class TrainingAgent:
                 return msg.content, usage
 
         raise RuntimeError(f"Auto-review tool loop exceeded max iterations ({max_iterations}).")
+
+    def weekly_recap(self) -> tuple[str, dict]:
+        """Generate a Monday morning training recap. Returns (recap_text, usage)."""
+        from datetime import date as date_cls
+        today = date_cls.today()
+        hrv_context = (
+            f"HRV normal range: {self.hrv_min}–{self.hrv_max} ms."
+            if self.hrv_min and self.hrv_max else "HRV range: not configured."
+        )
+        rhr_context = (
+            f"Resting HR normal range: {self.rhr_min}–{self.rhr_max} bpm."
+            if self.rhr_min and self.rhr_max else "Resting HR range: not configured."
+        )
+        system = WEEKLY_RECAP_SYSTEM_PROMPT.format(
+            today=today.isoformat(),
+            max_hours=self.max_hours,
+            max_tss=self.max_tss,
+            hrv_context=hrv_context,
+            rhr_context=rhr_context,
+        )
+        recap_tools = [t for t in TOOLS if t["function"]["name"] in {
+            "get_recent_activities", "get_wellness", "get_planned_workouts", "get_coach_ticks",
+        }]
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "Generate this week's training recap."},
+        ]
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        max_iterations = 20
+        for _ in range(max_iterations):
+            response = self.openai.chat.completions.create(
+                model=self.auto_review_model,
+                messages=messages,
+                tools=recap_tools,
+                tool_choice="auto",
+            )
+            if response.usage:
+                usage["prompt_tokens"] += response.usage.prompt_tokens
+                usage["completion_tokens"] += response.usage.completion_tokens
+                usage["total_tokens"] += response.usage.total_tokens
+            msg = response.choices[0].message
+            if msg.tool_calls:
+                messages.append(msg.model_dump())
+                for call in msg.tool_calls:
+                    try:
+                        args = json.loads(call.function.arguments)
+                    except json.JSONDecodeError as e:
+                        messages.append({"role": "tool", "tool_call_id": call.id,
+                                         "content": f"Error parsing arguments: {e}."})
+                        continue
+                    messages.append({"role": "tool", "tool_call_id": call.id,
+                                     "content": self._run_tool(call.function.name, args)})
+            else:
+                return msg.content, usage
+        raise RuntimeError("Weekly recap tool loop exceeded max iterations.")
+
+    def wellness_check(self) -> tuple[str, bool, dict]:
+        """Check today's wellness against baselines. Returns (message, is_alert, usage)."""
+        from datetime import date as date_cls
+        today = date_cls.today()
+        hrv_context = (
+            f"HRV normal range: {self.hrv_min}–{self.hrv_max} ms."
+            if self.hrv_min and self.hrv_max else "HRV range: not configured."
+        )
+        rhr_context = (
+            f"Resting HR normal range: {self.rhr_min}–{self.rhr_max} bpm."
+            if self.rhr_min and self.rhr_max else "Resting HR range: not configured."
+        )
+        system = WELLNESS_CHECK_SYSTEM_PROMPT.format(
+            today=today.isoformat(),
+            hrv_context=hrv_context,
+            rhr_context=rhr_context,
+            hrv_min=self.hrv_min or 0,
+            rhr_max=self.rhr_max or 999,
+        )
+        wellness_tools = [t for t in TOOLS if t["function"]["name"] in {
+            "get_wellness", "get_planned_workouts", "get_coach_ticks",
+        }]
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "Run this morning's wellness check."},
+        ]
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        max_iterations = 10
+        for _ in range(max_iterations):
+            response = self.openai.chat.completions.create(
+                model=self.auto_review_model,
+                messages=messages,
+                tools=wellness_tools,
+                tool_choice="auto",
+            )
+            if response.usage:
+                usage["prompt_tokens"] += response.usage.prompt_tokens
+                usage["completion_tokens"] += response.usage.completion_tokens
+                usage["total_tokens"] += response.usage.total_tokens
+            msg = response.choices[0].message
+            if msg.tool_calls:
+                messages.append(msg.model_dump())
+                for call in msg.tool_calls:
+                    try:
+                        args = json.loads(call.function.arguments)
+                    except json.JSONDecodeError as e:
+                        messages.append({"role": "tool", "tool_call_id": call.id,
+                                         "content": f"Error parsing arguments: {e}."})
+                        continue
+                    messages.append({"role": "tool", "tool_call_id": call.id,
+                                     "content": self._run_tool(call.function.name, args)})
+            else:
+                content = msg.content or ""
+                is_alert = content.lstrip().startswith("[ALERT]")
+                return content, is_alert, usage
+        raise RuntimeError("Wellness check tool loop exceeded max iterations.")
