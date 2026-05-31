@@ -1,19 +1,50 @@
 # Training Coach — Home Assistant Add-on
 
-An AI-powered cycling coach that lives inside Home Assistant and connects directly to your Intervals.icu training data. Chat with it like a real coach — ask questions, request feedback, plan workouts, and have it automatically review rides as they sync from your device.
+An AI-powered cycling coach that lives inside Home Assistant and connects directly to your Intervals.icu training data. Chat with it like a real coach — ask questions, get ride feedback, plan workouts, and have it automatically review rides, recap each week, and flag poor recovery days before you head out.
 
 ---
 
 ## What it does
 
-### Conversational coaching
-The coach understands natural language. You don't fill in forms or click buttons — you just talk to it. Ask broad questions like *"How has my training looked this month?"* or specific ones like *"Did I hit my targets on Tuesday's intervals?"* and it will fetch your actual data, analyse it, and respond with real coaching feedback. The coach is objective and direct — it will tell you when a session was poor and why, without unnecessary flattery.
+### Three focused modes
 
-### Multiple sessions
-The sidebar lets you create named sessions with separate histories — for example one for calendar planning, one for workout feedback, and one for general questions. Sessions are stored on your Home Assistant device and shared across all devices (phone, tablet, PC) that connect to the same instance. Double-click any session name to rename it.
+The interface is split into three tabs, each with its own purpose, system prompt, and tool access:
+
+**Review** — analysing rides you have already completed. Ask about interval execution, zone distribution, compliance with the planned session, or request a coach comment on a specific activity. The auto-review and weekly recap sessions also live here.
+
+**Health** — interpreting wellness data. Ask about HRV trends, recovery status, training load, or whether today's metrics warrant adjusting the plan. The daily wellness check session lives here. This mode is read-only — it never modifies your calendar.
+
+**Planning** — building and managing your training calendar. Create or modify workouts, plan multi-week blocks, prepare for upcoming races, review and update weekly notes.
+
+Each mode maintains its own set of sessions in the sidebar, so review conversations never get mixed with planning conversations.
 
 ### Automatic workout review
-When a new ride syncs to Intervals.icu and you have logged both an RPE and a feel score, the coach detects it within a few minutes and automatically writes a concise review — covering training load, zone distribution, decoupling, key efforts, and one or two concrete takeaways. The review is posted as a description on the activity in Intervals.icu and marked with a coach tick. A notification card appears only if the auto-review fails; successful reviews go straight to the **⚡ Auto-reviews** session and to the activity on Intervals.icu without interrupting you. From the auto-reviews session you can request a deeper analysis at any time.
+When a new ride syncs to Intervals.icu and you have logged both an RPE and a feel score, the coach detects it within a few minutes and automatically writes a concise review — covering training load, zone distribution, decoupling, key efforts, and one or two concrete takeaways. The review is posted as a description on the activity in Intervals.icu and marked with a coach tick. A notification card appears for errors only; successful reviews go straight to the **⚡ Auto-reviews** session in the Review tab without interrupting you. Tap **More detail** to request a deeper analysis.
+
+### Weekly recap (every Monday)
+Every Monday morning the coach automatically generates a structured training recap for the past week:
+
+- Total TSS and hours vs your configured weekly targets
+- Each session — date, name, compliance, RPE, and how it went
+- HRV and resting HR trend across the week relative to your baselines
+- Standout positives and any patterns worth watching
+- A brief recommendation for the coming week
+
+The recap is stored in the **📊 Weekly recaps** session (Review tab) and a notification card appears. If you have configured a push target it also sends a summary to your phone.
+
+### Daily wellness check (every morning)
+Every morning the coach checks your latest wellness metrics against your configured baselines. If HRV is suppressed, resting HR is elevated, or your form score (TSB) is below −20, it flags an alert — tells you which metric is concerning, looks at what is planned for the day, and suggests a specific adjustment (e.g. replace intervals with 60 minutes of easy Z2, or shorten the session by 30%).
+
+On normal days the check runs silently and records an `[OK]` entry. Push notifications and banner cards are shown only when an alert fires.
+
+Results are stored in the **❤️ Wellness checks** session (Health tab).
+
+### Push notifications
+Set `ha_notification_target` to the name of your phone's HA notify service (e.g. `mobile_app_iphone`) to receive push notifications for:
+- Weekly recaps (always)
+- Wellness alerts (only when metrics are poor)
+
+Leave the field empty to disable push notifications.
 
 ### Deep interval analysis
 For structured workouts the coach can break down individual intervals — comparing power, heart rate, and cadence across each rep, identifying drift or fatigue within a set, checking whether targets were hit, and commenting on work-to-rest ratios. For matched workouts (rides that completed a planned session) the coach focuses on interval execution and compares against the planned structure; for unstructured rides it gives equal weight to intervals and zone distribution.
@@ -58,11 +89,13 @@ The coach auto-detects group rides by keywords in activity names or tags. When p
 ### Coach ticks
 Whenever the coach posts a comment it also sets a coach tick on the activity — 1 = Really bad through 5 = Amazing — based on TSS, RPE, feel score, interval execution, and decoupling. This marks the workout as reviewed and triggers a notification in Intervals.icu if you have coached activity alerts enabled.
 
-### Wellness-aware feedback
-The coach reads your wellness data alongside your training — HRV, resting heart rate, sleep, fatigue, and form scores. Set your personal HRV and resting HR ranges in the configuration and the coach interprets daily values in context rather than in isolation.
+### Session management
+Each mode (Review, Health, Planning) has its own sidebar showing only its own sessions. Create named sessions with separate histories — for example one for your current training block, one for race prep questions. Sessions are stored on your Home Assistant device and shared across all devices (phone, tablet, PC) that connect to the same instance. Double-click any session name to rename it.
+
+The three automated sessions — Auto-reviews, Weekly recaps, and Wellness checks — are managed by the add-on and cannot be deleted.
 
 ### Token counter
-A daily token counter in the sidebar shows how many tokens have been used today across all chat and auto-review calls. It resets at midnight and persists across restarts.
+A daily token counter in the sidebar shows how many tokens have been used today across all chat and automated calls. It resets at midnight and persists across restarts.
 
 ---
 
@@ -70,7 +103,7 @@ A daily token counter in the sidebar shows how many tokens have been used today 
 
 ### OpenAI API key
 
-The coach uses OpenAI's GPT-5.5 model by default. Usage is pay-per-use — a typical coaching conversation costs a few cents, and each auto-review generates one API call.
+The coach uses OpenAI's GPT-5.5 model by default. Usage is pay-per-use — a typical coaching conversation costs a few cents, and each automated task generates one API call.
 
 1. Go to [platform.openai.com](https://platform.openai.com) and sign in or create an account
 2. Click your profile icon → **API keys**
@@ -112,15 +145,16 @@ Paste your athlete ID into `intervals_athlete_id` and your API key into `interva
 | `days_ahead` | How many days ahead to fetch planned workouts. Default: 21 |
 | `max_hours` | Weekly training volume ceiling in hours — the coach will not plan above this |
 | `max_tss` | Weekly TSS ceiling — the coach will not plan above this |
-| `hrv_min` | Lower end of your normal HRV range in ms (0 = not configured) |
-| `hrv_max` | Upper end of your normal HRV range in ms (0 = not configured) |
-| `rhr_min` | Lower end of your normal resting HR in bpm (0 = not configured) |
-| `rhr_max` | Upper end of your normal resting HR in bpm (0 = not configured) |
+| `hrv_min` | Lower end of your normal HRV range in ms — used by the daily wellness check |
+| `hrv_max` | Upper end of your normal HRV range in ms |
+| `rhr_min` | Lower end of your normal resting HR in bpm |
+| `rhr_max` | Upper end of your normal resting HR in bpm — daily wellness check alerts if resting HR exceeds this |
 | `hard_intervals_per_week` | Number of hard interval sessions to target per week (default: 3) |
 | `block_start_date` | Monday that started your current training season in `YYYY-MM-DD` format. Set once — the 4-week cycle repeats automatically |
 | `group_ride_keywords` | Keywords to auto-detect group rides in activity names/tags (default: `group,klub,klubtur`) |
-| `chat_model` | OpenAI model used for chat and auto-review (default: `gpt-5.5`) |
-| `auto_review_model` | OpenAI model used for auto-review (default: `gpt-5.5`) |
+| `chat_model` | OpenAI model used for interactive chat (default: `gpt-5.5`) |
+| `auto_review_model` | OpenAI model used for all automated tasks — auto-review, weekly recap, wellness check (default: `gpt-5.5`) |
+| `ha_notification_target` | HA notify service name for push notifications, e.g. `mobile_app_iphone`. Leave empty to disable push |
 
 ---
 
