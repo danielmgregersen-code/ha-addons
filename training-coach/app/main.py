@@ -303,6 +303,7 @@ app = FastAPI(title="Training Coach", root_path_in_servers=False, lifespan=lifes
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+    mode: str = "review"
 
 class ChatResponse(BaseModel):
     reply: str
@@ -326,7 +327,7 @@ def chat(req: ChatRequest):
     with sessions_lock:
         history = sessions.get(req.session_id, [])
     try:
-        reply, updated_history, usage = agent.chat(req.message, history)
+        reply, updated_history, usage = agent.chat(req.message, history, mode=req.mode)
         accumulate_tokens(usage)
         if len(updated_history) > MAX_HISTORY_MESSAGES:
             updated_history = updated_history[-MAX_HISTORY_MESSAGES:]

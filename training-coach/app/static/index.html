@@ -27,6 +27,13 @@
   .header-btn { background: none; border: 1px solid var(--border); color: var(--muted); font-family: 'DM Mono', monospace; font-size: 11px; padding: 5px 10px; border-radius: 6px; cursor: pointer; transition: all 0.15s; }
   .header-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+  /* ── Tab bar ── */
+  .tab-bar { background: var(--surface); border-bottom: 1px solid var(--border); display: flex; padding: 0 16px; flex-shrink: 0; }
+  .tab { background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; padding: 8px 16px; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 6px; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-badge { background: var(--accent); color: #0d0f14; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 8px; line-height: 1.4; }
+
   .main { display: flex; flex: 1; overflow: hidden; }
 
   #sidebar { width: var(--sidebar-w); background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; }
@@ -189,6 +196,8 @@
   </div>
 </header>
 
+<div class="tab-bar" id="tab-bar"></div>
+
 <div class="main">
   <div id="sidebar">
     <div class="sidebar-header">
@@ -217,7 +226,7 @@
 <div class="dialog-overlay" id="dialog-overlay">
   <div class="dialog">
     <h3>New session</h3>
-    <input type="text" id="session-name-input" placeholder="e.g. Calendar, Comments, Planning…" maxlength="40">
+    <input type="text" id="session-name-input" placeholder="e.g. Last week, Block 3, Recovery…" maxlength="40">
     <div class="dialog-btns">
       <button class="btn-cancel" id="dialog-cancel">Cancel</button>
       <button class="btn-create" id="dialog-create">Create</button>
@@ -231,29 +240,98 @@
   const inputEl = document.getElementById('input');
   const sendBtn = document.getElementById('send-btn');
   const sessionListEl = document.getElementById('session-list');
+  const tabBarEl = document.getElementById('tab-bar');
   let currentSessionId = null;
   let busy = false;
+  let activeMode = localStorage.getItem('activeMode') || 'review';
 
-  // Session list stored in localStorage (names only — history is on server)
+  const AUTO_REVIEW_SESSION = 'auto-reviews';
+
+  // ── Mode helpers ──
+
+  function getModePrefix(mode) {
+    return mode === 'planning' ? 'plan' : mode;
+  }
+
+  function isKnownModeId(id) {
+    return id.startsWith('review-') || id.startsWith('health-') || id.startsWith('plan-') || id === AUTO_REVIEW_SESSION;
+  }
+
+  function getSessionsForMode(mode) {
+    const prefix = getModePrefix(mode) + '-';
+    return getSessions().filter(s => {
+      if (mode === 'review') return s.id.startsWith(prefix) || s.id === AUTO_REVIEW_SESSION || !isKnownModeId(s.id);
+      return s.id.startsWith(prefix);
+    });
+  }
+
+  function ensureSessionForMode(mode) {
+    const existing = getSessionsForMode(mode);
+    if (existing.length) return existing;
+    const prefix = getModePrefix(mode);
+    const id = prefix + '-default';
+    const names = { review: 'General', health: 'Wellness', planning: 'Planning' };
+    const all = getSessions();
+    all.push({ id, name: names[mode] || 'General' });
+    saveSessions(all);
+    return [{ id, name: names[mode] || 'General' }];
+  }
+
+  // ── Tab bar ──
+
+  let unreadAutoReviews = 0;
+
+  function renderTabs() {
+    const modes = [
+      { id: 'review',   label: 'Review' },
+      { id: 'health',   label: 'Health' },
+      { id: 'planning', label: 'Planning' },
+    ];
+    tabBarEl.innerHTML = modes.map(m => {
+      const badge = (m.id === 'review' && unreadAutoReviews > 0 && activeMode !== 'review')
+        ? `<span class="tab-badge">${unreadAutoReviews}</span>` : '';
+      return `<button class="tab${activeMode === m.id ? ' active' : ''}" onclick="switchMode('${m.id}')">${m.label}${badge}</button>`;
+    }).join('');
+  }
+
+  async function switchMode(mode) {
+    if (mode === activeMode && currentSessionId) return;
+    activeMode = mode;
+    localStorage.setItem('activeMode', mode);
+    renderTabs();
+
+    const sessions = ensureSessionForMode(mode);
+    const lastId = localStorage.getItem('lastSession_' + mode);
+    const target = (lastId && sessions.find(s => s.id === lastId)) ? lastId : sessions[0].id;
+
+    renderSidebar();
+    messagesEl.innerHTML = '';
+    currentSessionId = null;
+    await switchSession(target);
+  }
+
+  // ── Session storage ──
+
   function getSessions() {
     try { return JSON.parse(localStorage.getItem('coach_sessions') || '[]'); } catch { return []; }
   }
   function saveSessions(s) { localStorage.setItem('coach_sessions', JSON.stringify(s)); }
   function slugify(n) { return n.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') || 'session'; }
 
-  const AUTO_REVIEW_SESSION = 'auto-reviews';
-
-  function ensureDefault() {
+  function ensureDefaults() {
     let s = getSessions();
-    if (!s.length) { s = [{ id: 'default', name: 'General' }]; }
     if (!s.find(x => x.id === AUTO_REVIEW_SESSION)) {
       s.push({ id: AUTO_REVIEW_SESSION, name: '⚡ Auto-reviews' });
+    }
+    if (!s.find(x => !isKnownModeId(x.id) || x.id.startsWith('review-') || x.id === AUTO_REVIEW_SESSION)) {
+      s.unshift({ id: 'review-default', name: 'General' });
     }
     saveSessions(s);
     return s;
   }
 
-  // Restore sessions and names from the server after a browser reset or device switch.
+  // ── Server sync ──
+
   async function syncSessionsFromServer() {
     try {
       const [sessRes, nameRes] = await Promise.all([
@@ -267,16 +345,14 @@
       const localIds = new Set(local.map(s => s.id));
       let changed = false;
 
-      // Restore any sessions missing from localStorage
       for (const [id, meta] of Object.entries(serverSessions)) {
         if (!localIds.has(id) && id !== AUTO_REVIEW_SESSION) {
           const name = serverNames[id] || meta.name || id;
-          local.splice(local.length - 1, 0, { id, name });
+          local.push({ id, name });
           changed = true;
         }
       }
 
-      // Also update names for existing sessions if server has a newer name
       for (const s of local) {
         if (serverNames[s.id] && serverNames[s.id] !== s.name) {
           s.name = serverNames[s.id];
@@ -291,11 +367,11 @@
     } catch {}
   }
 
-  let unreadAutoReviews = 0;
+  // ── Sidebar ──
 
   function renderSidebar() {
     sessionListEl.innerHTML = '';
-    getSessions().forEach(s => {
+    getSessionsForMode(activeMode).forEach(s => {
       const isAuto = s.id === AUTO_REVIEW_SESSION;
       const el = document.createElement('div');
       el.className = 'session-item' + (s.id === currentSessionId ? ' active' : '') + (isAuto ? ' auto-reviews' : '');
@@ -347,6 +423,7 @@
   async function switchSession(id) {
     if (id === currentSessionId) return;
     currentSessionId = id;
+    localStorage.setItem('lastSession_' + activeMode, id);
     renderSidebar();
     messagesEl.innerHTML = '';
     await loadHistory();
@@ -357,10 +434,18 @@
     if (!confirm(`Delete "${item?.name}"? History will be cleared.`)) return;
     await fetch(`${BASE}/chat/${id}`, { method: 'DELETE' });
     const updated = s.filter(x => x.id !== id);
-    if (!updated.length) updated.push({ id: 'default', name: 'General' });
     saveSessions(updated);
-    if (currentSessionId === id) { currentSessionId = null; await switchSession(updated[0].id); }
-    else renderSidebar();
+    if (currentSessionId === id) {
+      currentSessionId = null;
+      const remaining = getSessionsForMode(activeMode);
+      if (!remaining.length) {
+        await switchMode(activeMode);
+      } else {
+        await switchSession(remaining[0].id);
+      }
+    } else {
+      renderSidebar();
+    }
   }
 
   document.getElementById('new-session-btn').addEventListener('click', () => {
@@ -378,7 +463,8 @@
   function createSession() {
     const name = document.getElementById('session-name-input').value.trim();
     if (!name) return;
-    const id = slugify(name) + '-' + Date.now().toString(36);
+    const prefix = getModePrefix(activeMode);
+    const id = prefix + '-' + slugify(name) + '-' + Date.now().toString(36);
     const s = getSessions();
     s.push({ id, name });
     saveSessions(s);
@@ -405,6 +491,8 @@
     showWelcome();
   });
 
+  // ── Utilities ──
+
   function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
   function renderContent(role, text) {
@@ -423,18 +511,52 @@
     return wrap;
   }
 
+  const WELCOME_CONFIG = {
+    review: {
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="#0d0f14" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
+      heading: 'Review your rides',
+      desc: 'Analyse recent workouts, check interval execution, compare against targets, and post coach notes.',
+      suggestions: [
+        'Analyse my last ride',
+        'How did my intervals go yesterday?',
+        'Review this week\'s training',
+        'Post a comment on my latest ride',
+      ],
+    },
+    health: {
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="#0d0f14" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`,
+      heading: 'Wellness overview',
+      desc: 'Check your HRV trends, recovery status, and whether your body is ready for today\'s session.',
+      suggestions: [
+        'How is my HRV looking?',
+        'Am I recovered enough for today?',
+        'Is my training load sustainable?',
+        'Should I adjust today\'s session?',
+      ],
+    },
+    planning: {
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="#0d0f14" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`,
+      heading: 'Plan your training',
+      desc: 'Build multi-week training blocks, schedule workouts, and prepare for upcoming races.',
+      suggestions: [
+        'Build me a 4-week training block',
+        'Plan next week',
+        'What phase am I in for my upcoming race?',
+        'Adjust this week\'s plan',
+      ],
+    },
+  };
+
   function showWelcome() {
+    const cfg = WELCOME_CONFIG[activeMode] || WELCOME_CONFIG.review;
     const div = document.createElement('div');
     div.className = 'welcome'; div.id = 'welcome';
     div.innerHTML = `
-      <div class="welcome-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#0d0f14" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
-      <h2>Ready to train smarter</h2>
-      <p>Ask me about your recent workouts, interval analysis, upcoming plan, or request changes to your calendar.</p>
+      <div class="welcome-icon">${cfg.icon}</div>
+      <h2>${cfg.heading}</h2>
+      <p>${cfg.desc}</p>
       <div class="suggestions">
-        <button class="suggestion" onclick="sendSuggestion(this)">How did my training look this past week?</button>
-        <button class="suggestion" onclick="sendSuggestion(this)">Analyse my intervals from yesterday</button>
-        <button class="suggestion" onclick="sendSuggestion(this)">What does my upcoming plan look like?</button>
-        <button class="suggestion" onclick="sendSuggestion(this)">I'm feeling fatigued — ease up next week</button>
+        ${cfg.suggestions.map(s => `<button class="suggestion" onclick="sendSuggestion(this)">${escapeHtml(s)}</button>`).join('')}
       </div>`;
     messagesEl.appendChild(div);
   }
@@ -498,8 +620,6 @@
     addMessage('user', text);
     showThinking();
 
-    // Snapshot history length so we can detect a recovered reply if the
-    // network call fails mid-flight.
     let historyBaseline = null;
     try {
       const histRes = await fetch(`${BASE}/history/${currentSessionId}`);
@@ -512,11 +632,11 @@
     try {
       const res = await fetch(`${BASE}/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: currentSessionId, message: text }),
+        body: JSON.stringify({ session_id: currentSessionId, message: text, mode: activeMode }),
       });
       if (!res.ok) {
         let detail = 'Server error';
-        try { const text = await res.text(); try { detail = JSON.parse(text).detail || text || detail; } catch { detail = text || detail; } } catch { }
+        try { const t = await res.text(); try { detail = JSON.parse(t).detail || t || detail; } catch { detail = t || detail; } } catch {}
         throw new Error(detail);
       }
       const data = await res.json();
@@ -539,9 +659,7 @@
   }
 
   // ── Notifications ──
-  // Track which notification IDs we've already rendered, so we don't repeat
-  // a card if it stays unseen across multiple polls. Avoids timestamp/timezone
-  // skew between client and server.
+
   const shownNotifIds = new Set();
   const notifBanner = document.getElementById('notif-banner');
 
@@ -569,7 +687,6 @@
     if (!isError) card.querySelector('.notif-btn.primary').addEventListener('click', () => askMoreDetail(card.dataset.activityId, card.dataset.activityName, notif.id));
     card.querySelector('.notif-btn:not(.primary)').addEventListener('click', () => dismissNotif(notif.id));
     notifBanner.appendChild(card);
-    // Auto-dismiss after 60 seconds
     setTimeout(() => dismissNotif(notif.id), 60000);
   }
 
@@ -582,8 +699,12 @@
   function askMoreDetail(activityId, activityName, notifId) {
     dismissNotif(notifId);
     const msg = `Please give me a more detailed analysis of the ride "${activityName}" (ID: ${activityId})`;
-    inputEl.value = msg;
-    send();
+    if (activeMode !== 'review') {
+      switchMode('review').then(() => { inputEl.value = msg; send(); });
+    } else {
+      inputEl.value = msg;
+      send();
+    }
   }
 
   async function pollNotifications() {
@@ -599,12 +720,12 @@
         if (currentSessionId !== AUTO_REVIEW_SESSION) {
           unreadAutoReviews++;
           renderSidebar();
+          renderTabs();
         }
       });
     } catch {}
   }
 
-  // Poll every 30 seconds
   setInterval(pollNotifications, 30000);
 
   // ── Token counter ──
@@ -622,12 +743,11 @@
   refreshTokens();
   setInterval(refreshTokens, 60000);
 
-  // Toggle sidebar on mobile
+  // ── Mobile sidebar toggle ──
   function toggleSidebar() {
     document.getElementById('sidebar').classList.toggle('open');
   }
 
-  // Close sidebar when selecting a session on mobile
   const _origSwitch = switchSession;
   switchSession = async function(id) {
     await _origSwitch(id);
@@ -636,13 +756,12 @@
     }
   };
 
-  // Init — await server sync before first render so sessions are always restored
+  // ── Init ──
   (async function init() {
-    ensureDefault();
-    await syncSessionsFromServer();  // restore server sessions first
-    const s = getSessions();
-    renderSidebar();
-    await switchSession(s[0].id);
+    ensureDefaults();
+    await syncSessionsFromServer();
+    renderTabs();
+    await switchMode(activeMode);
     pollNotifications();
   })();
 </script>
