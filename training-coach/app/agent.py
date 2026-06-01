@@ -247,15 +247,15 @@ TOOLS = [
 
 _REVIEW_TOOL_NAMES = {
     "get_recent_activities", "get_activity_intervals", "get_planned_workout",
-    "get_coach_ticks", "post_activity_comment", "get_wellness",
+    "get_coach_ticks", "post_activity_comment",
 }
 _HEALTH_TOOL_NAMES = {
-    "get_wellness", "get_recent_activities", "get_coach_ticks",
+    "get_wellness", "get_coach_ticks",
 }
 _PLANNING_TOOL_NAMES = {
     "get_planned_workouts", "get_upcoming_races", "get_weekly_note", "write_weekly_note",
     "create_planned_workout", "update_planned_workout", "delete_planned_workout",
-    "get_recent_activities", "get_wellness", "get_coach_ticks",
+    "get_coach_ticks",
 }
 
 TOOLS_BY_MODE = {
@@ -388,7 +388,7 @@ Phase rules (weeks to first race day):
 - Always state race name, date(s), stage count if applicable, and phase override reason in the weekly note
 
 Guidelines:
-- Always fetch relevant data before planning — get upcoming races, current planned workouts, and wellness context
+- Always fetch relevant data before planning — get upcoming races and current planned workouts
 - Weeks start on Monday (European standard)
 - Confirm with the athlete before making changes to the calendar
 - Consider cumulative fatigue before adding hard sessions
@@ -896,7 +896,7 @@ class TrainingAgent:
             rhr_max=self.rhr_max or 999,
         )
         wellness_tools = [t for t in TOOLS if t["function"]["name"] in {
-            "get_wellness", "get_planned_workouts", "get_coach_ticks",
+            "get_wellness", "get_planned_workouts",
         }]
         messages = [
             {"role": "system", "content": system},
