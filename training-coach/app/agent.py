@@ -68,7 +68,7 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "days_ahead": {"type": "integer", "default": 21}
+                    "days_ahead": {"type": "integer", "default": 35}
                 },
             },
         },
@@ -440,7 +440,7 @@ Group ride handling:
   * For each group ride, ask: (1) should it count as one of the {hard_intervals_per_week} hard sessions? (2) if yes, what type? Adjust additional structured sessions accordingly
   * Do not pre-reserve a day or assign a fixed TSS estimate for group rides
 
-Planned workouts — duplicate prevention: before calling create_planned_workout for any date, check get_planned_workouts results for that date. If a workout already exists there, use update_planned_workout with its event_id instead. Never call create_planned_workout for a date that already has a workout.
+Planned workouts — duplicate prevention: before calling create_planned_workout for any date, check get_planned_workouts results for that date. If a workout already exists there, use update_planned_workout with its event_id instead. Never call create_planned_workout for a date that already has a workout. Note: if you do call create_planned_workout for a date that already has a workout, the system will automatically update the existing workout and return updated_existing: true — do not retry.
 
 delete_planned_workout must only be called when the athlete explicitly asks to delete a workout. Never delete as part of a planning workflow — always use update_planned_workout instead.
 
@@ -551,7 +551,7 @@ class TrainingAgent:
             elif name == "get_wellness":
                 result = self.icu.get_wellness(args.get("days_back", 14))
             elif name == "get_planned_workouts":
-                result = self.icu.get_events(args.get("days_ahead", 21))
+                result = self.icu.get_events(args.get("days_ahead", 35))
             elif name == "get_planned_workout":
                 result = self.icu.get_event(args["event_id"])
             elif name == "get_coach_ticks":
@@ -563,14 +563,43 @@ class TrainingAgent:
                     coach_tick_id=args.get("coach_tick_id"),
                 )
             elif name == "create_planned_workout":
-                result = self.icu.create_planned_workout(
-                    date=args["date"],
-                    name=args["name"],
-                    description=args["description"],
-                    sport_type=args.get("sport_type", "Ride"),
-                    planned_duration_seconds=args.get("planned_duration_seconds"),
-                    planned_tss=args.get("planned_tss"),
-                )
+                # Enforce deduplication: redirect to update if a WORKOUT already exists on this date.
+                # This is a server-level guarantee — model instructions alone are insufficient.
+                target_date = args["date"]
+                existing_event = None
+                try:
+                    from datetime import datetime as _dt
+                    target_dt = _dt.strptime(target_date, "%Y-%m-%d")
+                    days_ahead = max(1, (_dt.now() - target_dt).days * -1 + 1)
+                    existing = self.icu.get_events(days_ahead=days_ahead)
+                    existing_event = next(
+                        (e for e in existing
+                         if e.get("date") == target_date and e.get("category") == "WORKOUT"),
+                        None,
+                    )
+                except Exception:
+                    pass  # on any failure, fall through to normal create
+
+                if existing_event:
+                    result = self.icu.update_planned_workout(
+                        event_id=str(existing_event["id"]),
+                        name=args.get("name"),
+                        description=args.get("description"),
+                        sport_type=args.get("sport_type"),
+                        planned_duration_seconds=args.get("planned_duration_seconds"),
+                        planned_tss=args.get("planned_tss"),
+                    )
+                    result = {"updated_existing": True, "event_id": existing_event["id"],
+                              "date": target_date, "result": result}
+                else:
+                    result = self.icu.create_planned_workout(
+                        date=target_date,
+                        name=args["name"],
+                        description=args["description"],
+                        sport_type=args.get("sport_type", "Ride"),
+                        planned_duration_seconds=args.get("planned_duration_seconds"),
+                        planned_tss=args.get("planned_tss"),
+                    )
             elif name == "update_planned_workout":
                 result = self.icu.update_planned_workout(
                     event_id=args["event_id"],

@@ -309,8 +309,16 @@ class IntervalsClient:
             if e.get("category") == "RACE_A":
                 start = e.get("start_date_local", "")[:10]
                 end = e.get("end_date_local", "")[:10]
-                # Multi-day if end is set and different from start
-                multi_day = bool(end and end != start and end > start)
+                # Intervals.icu stores end_date_local as an exclusive boundary (midnight of
+                # the next day) even for single-day events. Require a gap of >1 day so that
+                # a single-day event (end = start + 1 day) is not mis-classified as multi-day.
+                try:
+                    multi_day = bool(
+                        start and end and
+                        (datetime.strptime(end, "%Y-%m-%d") - datetime.strptime(start, "%Y-%m-%d")).days > 1
+                    )
+                except (ValueError, TypeError):
+                    multi_day = False
                 races.append({
                     "id": e.get("id"),
                     "name": e.get("name"),
