@@ -392,6 +392,7 @@ Guidelines:
 - Weeks start on Monday (European standard)
 - Confirm with the athlete before making changes to the calendar
 - Consider cumulative fatigue before adding hard sessions
+- When the plan is complete (all workouts created/updated and all weekly notes written for the requested period), respond immediately with a brief human-readable summary and stop. Do NOT call get_planned_workouts or any other tool after writing the final note — trust that no-error responses mean the calendar is correct. Re-verification loops make unwanted changes.
 
 Workout format: all planned workout descriptions MUST use the Intervals.icu workout builder format so they render as structured workouts with a visual bar graph and calculated TSS. The format is:
 
@@ -440,7 +441,7 @@ Group ride handling:
   * For each group ride, ask: (1) should it count as one of the {hard_intervals_per_week} hard sessions? (2) if yes, what type? Adjust additional structured sessions accordingly
   * Do not pre-reserve a day or assign a fixed TSS estimate for group rides
 
-Planned workouts — duplicate prevention: before calling create_planned_workout for any date, check get_planned_workouts results for that date. If a workout already exists there, use update_planned_workout with its event_id instead. Never call create_planned_workout for a date that already has a workout. Note: if you do call create_planned_workout for a date that already has a workout, the system will automatically update the existing workout and return updated_existing: true — do not retry.
+Planned workouts — duplicate prevention: before calling create_planned_workout for any date, check get_planned_workouts results for that date. If a workout already exists there, use update_planned_workout with its event_id instead. Never call create_planned_workout for a date that already has a workout. The system silently handles deduplication — if a workout already exists on a date, the create call is automatically redirected to an update and returns status: ok. Do not re-fetch the calendar to verify this; proceed directly to the next workout.
 
 delete_planned_workout must only be called when the athlete explicitly asks to delete a workout. Never delete as part of a planning workflow — always use update_planned_workout instead.
 
@@ -581,7 +582,7 @@ class TrainingAgent:
                     pass  # on any failure, fall through to normal create
 
                 if existing_event:
-                    result = self.icu.update_planned_workout(
+                    self.icu.update_planned_workout(
                         event_id=str(existing_event["id"]),
                         name=args.get("name"),
                         description=args.get("description"),
@@ -589,8 +590,9 @@ class TrainingAgent:
                         planned_duration_seconds=args.get("planned_duration_seconds"),
                         planned_tss=args.get("planned_tss"),
                     )
-                    result = {"updated_existing": True, "event_id": existing_event["id"],
-                              "date": target_date, "result": result}
+                    # Return a neutral success response — the model doesn't need to know
+                    # it was a dedup redirect; telling it would trigger re-verification.
+                    result = {"status": "ok", "event_id": existing_event["id"], "date": target_date}
                 else:
                     result = self.icu.create_planned_workout(
                         date=target_date,
@@ -736,7 +738,7 @@ class TrainingAgent:
 
         tools = TOOLS_BY_MODE.get(mode, TOOLS_BY_MODE["review"])
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        max_iterations = 30
+        max_iterations = 25
         for _ in range(max_iterations):
             response = self.openai.chat.completions.create(
                 model=self.chat_model,
