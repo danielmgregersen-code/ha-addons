@@ -621,12 +621,23 @@ class TrainingAgent:
                     result = {"found": False, "monday_date": args["monday_date"],
                               "message": "No weekly note found for this Monday."}
             elif name == "write_weekly_note":
-                result = self.icu.write_weekly_note(
-                    monday_date=args["monday_date"],
+                monday_date = args["monday_date"]
+                event_id = args.get("event_id")
+                if not event_id:
+                    # Server-level dedup: always update if a note already exists on this Monday.
+                    try:
+                        existing_note = self.icu.get_weekly_note(monday_date)
+                        if existing_note:
+                            event_id = existing_note.get("id")
+                    except Exception:
+                        pass
+                self.icu.write_weekly_note(
+                    monday_date=monday_date,
                     name=args["name"],
                     content=args["content"],
-                    event_id=args.get("event_id"),
+                    event_id=event_id,
                 )
+                result = {"status": "ok", "event_id": event_id, "monday_date": monday_date}
             elif name == "delete_planned_workout":
                 result = self.icu.delete_event(args["event_id"])
             else:
@@ -726,8 +737,19 @@ class TrainingAgent:
             and m.get("content")
             and not m.get("tool_calls")
         ]
-        # Keep last 5 exchanges (10 messages), starting on a user message
-        trimmed = lean_history[-10:]
+
+        # Short-circuit: if the identical question was already answered in the most recent
+        # turn, return the cached reply without calling OpenAI. This prevents repeat API
+        # calls when the user re-sends because a slow response appeared to have failed.
+        last_user = next((m["content"] for m in reversed(lean_history) if m.get("role") == "user"), None)
+        last_reply = next((m["content"] for m in reversed(lean_history) if m.get("role") == "assistant"), None)
+        if last_user == user_message and last_reply:
+            return last_reply, history, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+        # Keep last 3 exchanges (6 messages), starting on a user message.
+        # Capped at 3 (down from 5) to prevent long ride analyses from bloating context —
+        # each analysis can be 3000+ tokens and 5 copies would exceed 15k tokens of history alone.
+        trimmed = lean_history[-6:]
         while trimmed and self._safe_role(trimmed[0]) != "user":
             trimmed = trimmed[1:]
         trimmed_history = trimmed
