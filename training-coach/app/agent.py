@@ -337,8 +337,8 @@ Interpretation guidelines:
 - HRV: compare each day's reading to the athlete's normal range. Consistently below baseline = accumulated fatigue or illness. Trending up = adapting well. Single low readings after hard efforts are normal
 - Resting HR: elevated (above normal range) on waking suggests incomplete recovery or illness. Trending down over weeks means improving aerobic fitness
 - Fatigue/form/fitness (CTL/ATL/TSB): CTL = fitness (chronic load), ATL = fatigue (acute load), TSB (form) = CTL − ATL. Very negative form (< −20) = high injury/illness risk
-- Sleep: poor sleep amplifies all other fatigue signals — flag it if present
-- Combine signals: a single low HRV is not a crisis; HRV suppressed + elevated RHR + high ATL together warrant a recommendation
+- Sleep: the wellness data includes sleepScore (0–100, higher is better) and sleepSecs (total sleep time). ALWAYS report the most recent sleep score and comment on the recent trend. Below ~60 is poor and amplifies all other fatigue signals; flag it. Always include sleep in a general health check even when it looks fine
+- Combine signals: a single low HRV is not a crisis; poor sleep + suppressed HRV + elevated RHR + high ATL together warrant a recommendation
 
 Recommendations (only when data supports it):
 - Soften today's or tomorrow's session: suggest reducing intensity or duration by 10–20%
@@ -486,19 +486,20 @@ You have direct access to the athlete's training data via Intervals.icu.
 Today's date: {today}
 
 Athlete baselines: {hrv_context} {rhr_context}
-Alert thresholds: HRV below {hrv_min} ms is suppressed. RHR above {rhr_max} bpm is elevated. TSB (form) below −20 is high-fatigue risk.
+Alert thresholds: HRV below {hrv_min} ms is suppressed. RHR above {rhr_max} bpm is elevated. TSB (form) below −20 is high-fatigue risk. Sleep score below 60 (out of 100) is poor.
 
 Your task:
-1. Call get_wellness(days_back=3) to get the most recent HRV, RHR, fatigue, and form readings
+1. Call get_wellness(days_back=3) to get the most recent HRV, RHR, fatigue, form, and sleep readings (sleepScore 0–100, sleepSecs)
 2. Call get_planned_workouts(days_ahead=1) to see if there is a structured workout planned today
 3. Assess whether any metric crosses the alert threshold above
 4. Write a brief morning check-in
 
 IMPORTANT — begin your response with exactly one of these tokens on its own line:
-- `[ALERT]` if ANY metric is at or beyond an alert threshold (HRV suppressed, RHR elevated, or TSB ≤ −20)
+- `[ALERT]` if ANY metric is at or beyond an alert threshold (HRV suppressed, RHR elevated, TSB ≤ −20, or sleep score below 60)
 - `[OK]` if all metrics are within normal range
 
 After the token, write 3-6 sentences:
+- Always state last night's sleep score and the recent HRV/RHR/form readings
 - State which metrics are concerning (if ALERT) or reassuring (if OK)
 - If ALERT and a structured workout is planned today: suggest a specific adjustment (e.g. replace intervals with 60 min easy Z2, or shorten duration by 30%)
 - If ALERT and no workout planned: advise rest or very light movement
