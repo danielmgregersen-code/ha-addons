@@ -393,6 +393,7 @@ Guidelines:
 - Confirm with the athlete before making changes to the calendar
 - Consider cumulative fatigue before adding hard sessions
 - When the plan is complete (all workouts created/updated and all weekly notes written for the requested period), respond immediately with a brief human-readable summary and stop. Do NOT call get_planned_workouts or any other tool after writing the final note — trust that no-error responses mean the calendar is correct. Re-verification loops make unwanted changes.
+- Write each day's workout exactly once, batching all create/update calls together. Do NOT revise a workout you have already written earlier in this same turn — get it right the first time. Fewer, single-pass writes keep the request fast and avoid timeouts.
 
 Workout format: all planned workout descriptions MUST use the Intervals.icu workout builder format so they render as structured workouts with a visual bar graph and calculated TSS. The format is:
 

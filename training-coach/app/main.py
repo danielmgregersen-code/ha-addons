@@ -54,6 +54,7 @@ def load_options() -> dict:
         "chat_model": os.getenv("CHAT_MODEL", "gpt-5.5"),
         "auto_review_model": os.getenv("AUTO_REVIEW_MODEL", "gpt-5.5"),
         "ha_notification_target": os.getenv("HA_NOTIFICATION_TARGET", ""),
+        "daily_token_budget": int(os.getenv("DAILY_TOKEN_BUDGET", "250000")),
     }
 
 
@@ -170,6 +171,20 @@ sessions_lock = threading.RLock()
 notifications_lock = threading.RLock()
 session_names_lock = threading.RLock()
 token_usage_lock = threading.RLock()
+
+# Per-session locks serialize /chat requests for the same session, so a proxy or
+# browser retry of a slow turn waits for the in-flight run instead of reprocessing.
+session_chat_locks: dict[str, threading.Lock] = {}
+session_chat_locks_meta = threading.Lock()
+
+
+def get_session_chat_lock(session_id: str) -> threading.Lock:
+    with session_chat_locks_meta:
+        lock = session_chat_locks.get(session_id)
+        if lock is None:
+            lock = threading.Lock()
+            session_chat_locks[session_id] = lock
+        return lock
 
 # Debouncer for session saves — batch writes within a time window.
 # Uses threading.Timer so it works correctly from sync endpoints (which run
@@ -406,9 +421,11 @@ class ChatRequest(BaseModel):
     session_id: str
     message: str
     mode: str = "review"
+    confirm_over_budget: bool = False
 
 class ChatResponse(BaseModel):
     reply: str
+    needs_budget_confirmation: bool = False
 
 class HistoryResponse(BaseModel):
     messages: list
@@ -426,9 +443,34 @@ async def root(request: Request):
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    with sessions_lock:
-        history = sessions.get(req.session_id, [])
+    # Serialize requests for the same session. A proxy/browser retry of a slow
+    # planning turn would otherwise reprocess the whole turn concurrently.
+    lock = get_session_chat_lock(req.session_id)
+    acquired = lock.acquire(timeout=300)
+    if not acquired:
+        raise HTTPException(status_code=503, detail="A request for this session is still processing. Please wait.")
     try:
+        # Daily token budget gate — pause and ask before spending beyond the free tier.
+        budget = options.get("daily_token_budget", 250000)
+        if budget and budget > 0:
+            today = datetime.now().strftime("%Y-%m-%d")
+            with token_usage_lock:
+                used = token_usage.get("total_tokens", 0) if token_usage.get("date") == today else 0
+                over = used >= budget
+                acked = token_usage.get("ack_date") == today
+            if over and not acked and not req.confirm_over_budget:
+                msg = (f"⚠ You've used ~{used/1000:.0f}k tokens today, past the {budget/1000:.0f}k "
+                       f"free-tier limit — further requests are pay-as-you-go. Continue?")
+                return ChatResponse(reply=msg, needs_budget_confirmation=True)
+            if over and req.confirm_over_budget and not acked:
+                with token_usage_lock:
+                    token_usage["ack_date"] = today
+                    save_token_usage(token_usage)
+
+        # Read history inside the lock so a serialized retry sees the freshly-saved
+        # answer and short-circuits instead of reprocessing.
+        with sessions_lock:
+            history = sessions.get(req.session_id, [])
         reply, updated_history, usage = agent.chat(req.message, history, mode=req.mode)
         accumulate_tokens(usage)
         if len(updated_history) > MAX_HISTORY_MESSAGES:
@@ -438,8 +480,12 @@ def chat(req: ChatRequest):
             # Debounce the save — batch writes within 5 second window
             sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
         return ChatResponse(reply=reply)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        lock.release()
 
 
 @app.get("/history/{session_id}", response_model=HistoryResponse)

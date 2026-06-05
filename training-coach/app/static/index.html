@@ -646,17 +646,32 @@
       }
     } catch {}
 
-    try {
+    const postChat = async (confirmOverBudget) => {
       const res = await fetch(`${BASE}/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: currentSessionId, message: text, mode: activeMode }),
+        body: JSON.stringify({ session_id: currentSessionId, message: text, mode: activeMode, confirm_over_budget: confirmOverBudget }),
       });
       if (!res.ok) {
         let detail = 'Server error';
         try { const t = await res.text(); try { detail = JSON.parse(t).detail || t || detail; } catch { detail = t || detail; } } catch {}
         throw new Error(detail);
       }
-      const data = await res.json();
+      return res.json();
+    };
+
+    try {
+      let data = await postChat(false);
+      if (data.needs_budget_confirmation) {
+        hideThinking();
+        if (confirm(data.reply.replace(/^⚠\s*/, ''))) {
+          showThinking();
+          data = await postChat(true);
+          hideThinking(); addMessage('coach', data.reply); refreshTokens();
+        } else {
+          addMessage('coach', 'Stopped — your daily token budget was not exceeded further.');
+        }
+        return;
+      }
       hideThinking(); addMessage('coach', data.reply); refreshTokens();
     } catch(e) {
       // TypeError typically means the connection was killed (e.g. ingress

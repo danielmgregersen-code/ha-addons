@@ -1,6 +1,6 @@
 name: "Training Coach"
 description: "AI coaching agent connected to your Intervals.icu training data."
-version: "1.1.62"
+version: "1.1.63"
 slug: "training_coach"
 init: false
 arch:
@@ -38,6 +38,7 @@ options:
   chat_model: "gpt-5.5"
   auto_review_model: "gpt-5.5"
   ha_notification_target: ""
+  daily_token_budget: 250000
 
 schema:
   openai_api_key: str
@@ -57,6 +58,7 @@ schema:
   chat_model: str
   auto_review_model: str
   ha_notification_target: str
+  daily_token_budget: int
 
 homeassistant_api: true
 
