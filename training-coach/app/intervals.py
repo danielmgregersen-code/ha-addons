@@ -146,7 +146,29 @@ class IntervalsClient:
             "coach_tick": a.get("coach_tick"),       # ID of coach tick if already reviewed
             "description": a.get("description"),     # coach comment lives here
             "group_ride": self._is_group_ride(a, group_keywords),
+            "gear_id": a.get("gear_id"),
+            "trainer": a.get("trainer"),
+            "weather_humidity": a.get("humidity"),
+            "weather_precipitation": a.get("precipitation"),
         }
+
+    def get_gear(self) -> list[dict]:
+        """Fetch gear (bikes) from the athlete profile."""
+        try:
+            data = self._get(f"/athlete/{self.athlete_id}")
+            gear = data.get("gear") or []
+            return [
+                {
+                    "id": g.get("id"),
+                    "name": g.get("name"),
+                    "distance": g.get("distance"),
+                    "primary": g.get("primary", False),
+                }
+                for g in gear
+            ]
+        except Exception as e:
+            print(f"Warning: could not fetch gear: {e}", flush=True)
+            return []
 
     def get_event(self, event_id: int) -> dict:
         """Fetch a single calendar event (planned workout) by ID."""
