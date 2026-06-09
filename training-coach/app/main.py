@@ -365,6 +365,13 @@ async def auto_review_loop():
                     gear_id=activity.get("gear_id"),
                     pm_serial=activity.get("power_meter_serial"),
                 )
+                # Only log rides on/after the chain was activated. Without this,
+                # marking a chain active would back-sync the prior 14 days of
+                # rides onto the new chain.
+                active_since = chain_ref.get("active_since") if chain_ref else None
+                activity_date = activity.get("date", "")
+                if chain_ref and active_since and activity_date and activity_date < active_since:
+                    chain_ref = None
                 if chain_ref:
                     try:
                         sport_type = activity.get("type") or ""
@@ -780,6 +787,15 @@ def delete_sealant(sealant_id: str):
 def log_sealant_checkin(sealant_id: str, body: SealantCheckinBody):
     try:
         return chain_manager.log_sealant_checkin(sealant_id, body.date, body.note)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.patch("/sealants/{sealant_id}/last-checkin")
+def set_sealant_last_checkin(sealant_id: str, body: SealantCheckinBody):
+    if not body.date:
+        raise HTTPException(status_code=422, detail="date is required")
+    try:
+        return chain_manager.set_last_checkin(sealant_id, body.date)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

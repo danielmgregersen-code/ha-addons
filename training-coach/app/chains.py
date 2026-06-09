@@ -129,10 +129,18 @@ class ChainManager:
 
     def match_activity(self, gear_id: str = None, pm_serial: str = None) -> dict | None:
         """Find the active, non-retired chain for an activity, matching by Strava
-        gear_id first, then by power meter serial. Returns {"id", "bike_type"} or None.
+        gear_id first, then by power meter serial. Returns
+        {"id", "bike_type", "active_since"} or None.
 
         Matching by power meter serial lets wear tracking work without Strava sync —
-        the serial identifies the physical bike the chain is on."""
+        the serial identifies the physical bike the chain is on. `active_since` lets
+        the caller avoid back-syncing rides from before the chain was activated."""
+        def _ref(c):
+            return {
+                "id": c["id"],
+                "bike_type": c.get("bike_type", "road"),
+                "active_since": c.get("active_since"),
+            }
         with self._lock:
             candidates = [
                 c for c in self._data.get("chains", [])
@@ -140,10 +148,10 @@ class ChainManager:
             ]
             for c in candidates:
                 if gear_id and c.get("gear_id") and c["gear_id"] == gear_id:
-                    return {"id": c["id"], "bike_type": c.get("bike_type", "road")}
+                    return _ref(c)
             for c in candidates:
                 if pm_serial and c.get("pm_serial") and str(c["pm_serial"]) == str(pm_serial):
-                    return {"id": c["id"], "bike_type": c.get("bike_type", "road")}
+                    return _ref(c)
         return None
 
     @staticmethod
@@ -158,13 +166,19 @@ class ChainManager:
     def upsert_chain(self, data: dict) -> dict:
         """Create or update a chain. data must include 'id'.
         If active=True, deactivates other chains on the same bike (shared gear_id or pm_serial)."""
+        today = datetime.now().strftime("%Y-%m-%d")
         with self._lock:
             chains = self._data.setdefault("chains", [])
             existing = next((c for c in chains if c["id"] == data["id"]), None)
             if existing:
+                was_active = existing.get("active", False)
                 for k, v in data.items():
                     if v is not None:
                         existing[k] = v
+                # Transitioning into active stamps the activation date so wear
+                # logging won't back-sync rides from before this point.
+                if existing.get("active") and not was_active:
+                    existing["active_since"] = today
             else:
                 chains.append({
                     "id": data["id"],
@@ -174,6 +188,7 @@ class ChainManager:
                     "bike_type": data.get("bike_type", "road"),
                     "base_wax_hours": data.get("base_wax_hours", 12),
                     "active": data.get("active", True),
+                    "active_since": today if data.get("active", True) else None,
                     "retired": False,
                     "wax_events": [],
                     "sealant_events": [],
@@ -197,8 +212,11 @@ class ChainManager:
                 raise ValueError(f"Chain {chain_id!r} not found")
             if chain.get("retired"):
                 raise ValueError(f"Chain {chain_id!r} is retired — restore it first")
+            today = datetime.now().strftime("%Y-%m-%d")
             for c in self._data.get("chains", []):
                 if c["id"] == chain_id:
+                    if not c.get("active"):
+                        c["active_since"] = today
                     c["active"] = True
                 elif self._same_bike(chain, c):
                     c["active"] = False
@@ -379,6 +397,24 @@ class ChainManager:
             if not sealant:
                 raise ValueError(f"Sealant {sealant_id!r} not found")
             sealant.setdefault("events", []).append({"date": date, "note": note})
+            self._save()
+            return self._compute_sealant_status(sealant)
+
+    def set_last_checkin(self, sealant_id: str, date: str) -> dict:
+        """Correct the date of the most recent sealant check-in (for when it
+        wasn't logged the same day). Appends a check-in if none exist yet."""
+        with self._lock:
+            sealant = next(
+                (s for s in self._data.get("sealants", []) if s["id"] == sealant_id), None
+            )
+            if not sealant:
+                raise ValueError(f"Sealant {sealant_id!r} not found")
+            events = sealant.setdefault("events", [])
+            if events:
+                latest = max(events, key=lambda e: e["date"])
+                latest["date"] = date
+            else:
+                events.append({"date": date, "note": ""})
             self._save()
             return self._compute_sealant_status(sealant)
 
