@@ -363,6 +363,7 @@
             <th>×</th>
             <th>Consumed</th>
             <th></th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="wear-table-body"></tbody>
@@ -1194,27 +1195,45 @@
     document.getElementById('wear-dialog-title').textContent = `Ride log — ${chainName}`;
     document.getElementById('wear-add-date').value = new Date().toISOString().slice(0, 10);
     document.getElementById('wear-add-hours').value = '';
-    await populateConditionDropdown();
+    const bikeType = allChains.find(c => c.id === chainId)?.bike_type || 'road';
+    await populateConditionDropdown(bikeType);
     await renderWearTable(chainId);
     document.getElementById('wear-dialog-overlay').classList.add('open');
   }
 
-  async function populateConditionDropdown() {
+  let conditionsByBikeType = null;
+
+  async function populateConditionDropdown(bikeType) {
     const sel = document.getElementById('wear-add-condition');
-    if (sel.options.length > 1) return;
     sel.innerHTML = '';
     try {
-      const res = await fetch(`${BASE}/chains/conditions`);
-      if (res.ok) {
-        const data = await res.json();
-        (data.conditions || []).forEach(c => {
-          const opt = document.createElement('option');
-          opt.value = c; opt.textContent = c;
-          if (c === 'Standard Dry') opt.selected = true;
-          sel.appendChild(opt);
-        });
+      if (!conditionsByBikeType) {
+        const res = await fetch(`${BASE}/chains/conditions`);
+        if (res.ok) conditionsByBikeType = (await res.json()).conditions || {};
       }
+      const conditions = (conditionsByBikeType && conditionsByBikeType[bikeType]) || [];
+      conditions.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c; opt.textContent = c;
+        if (c === 'Standard Dry') opt.selected = true;
+        sel.appendChild(opt);
+      });
     } catch {}
+  }
+
+  let editingWear = null; // { chainId, activityId }
+
+  function buildConditionOptions(bikeType, selected) {
+    if (!conditionsByBikeType) return '';
+    return (conditionsByBikeType[bikeType] || []).map(c =>
+      `<option value="${escapeHtml(c)}"${c === selected ? ' selected' : ''}>${escapeHtml(c)}</option>`
+    ).join('');
+  }
+
+  function buildChainOptions(selectedId) {
+    return allChains.map(c =>
+      `<option value="${escapeHtml(c.id)}"${c.id === selectedId ? ' selected' : ''}>${escapeHtml(c.name)}</option>`
+    ).join('');
   }
 
   async function renderWearTable(chainId) {
@@ -1222,19 +1241,90 @@
     const tbody = document.getElementById('wear-table-body');
     const entries = (chain?.wear_log || []).slice().sort((a, b) => b.date.localeCompare(a.date));
     if (!entries.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="wear-empty">No rides logged yet</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="wear-empty">No rides logged yet</td></tr>';
       return;
     }
-    tbody.innerHTML = entries.map(e => `
-      <tr>
-        <td>${escapeHtml(e.date)}</td>
-        <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.activity_name || '—')}</td>
-        <td>${escapeHtml(e.condition)}</td>
-        <td>${(e.duration_hours || 0).toFixed(1)}</td>
-        <td style="color:var(--muted)">${e.multiplier}×</td>
-        <td style="color:var(--accent)">${(e.hours_consumed || 0).toFixed(2)}</td>
-        <td><button class="wear-delete" title="Remove entry" onclick="deleteWearEntry('${escapeJs(chainId)}','${escapeJs(e.activity_id)}')">×</button></td>
-      </tr>`).join('');
+    tbody.innerHTML = entries.map(e => {
+      const sid = escapeJs(chainId);
+      const aid = escapeJs(e.activity_id);
+      return `
+        <tr data-activity-id="${escapeHtml(e.activity_id)}">
+          <td>${escapeHtml(e.date)}</td>
+          <td style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.activity_name || '—')}</td>
+          <td>${escapeHtml(e.condition)}</td>
+          <td>${(e.duration_hours || 0).toFixed(1)}</td>
+          <td style="color:var(--muted)">${e.multiplier}×</td>
+          <td style="color:var(--accent)">${(e.hours_consumed || 0).toFixed(2)}</td>
+          <td><button class="wear-delete" title="Edit" onclick="startEditWear('${sid}','${aid}')">✎</button></td>
+          <td><button class="wear-delete" title="Remove" onclick="deleteWearEntry('${sid}','${aid}')">×</button></td>
+        </tr>`;
+    }).join('');
+  }
+
+  function startEditWear(chainId, activityId) {
+    const chain = allChains.find(c => c.id === chainId);
+    const entry = chain?.wear_log?.find(e => e.activity_id === activityId);
+    if (!entry) return;
+    editingWear = { chainId, activityId };
+
+    const row = document.querySelector(`#wear-table-body tr[data-activity-id="${CSS.escape(activityId)}"]`);
+    if (!row) return;
+
+    const bikeType = chain.bike_type || 'road';
+    const condOpts = buildConditionOptions(bikeType, entry.condition);
+    const chainOpts = buildChainOptions(chainId);
+
+    row.innerHTML = `
+      <td>${escapeHtml(entry.date)}</td>
+      <td style="font-size:10px;color:var(--muted)">${escapeHtml(entry.activity_name || '—')}</td>
+      <td>
+        <select id="edit-cond-sel" class="form-select" style="font-size:11px;padding:3px 6px;min-width:120px">${condOpts}</select>
+      </td>
+      <td colspan="2">
+        <select id="edit-chain-sel" class="form-select" style="font-size:11px;padding:3px 6px;min-width:100px" onchange="onEditChainChange(this.value,'${escapeJs(entry.condition)}')">${chainOpts}</select>
+      </td>
+      <td style="color:var(--muted);font-size:10px">${(entry.duration_hours || 0).toFixed(1)}h</td>
+      <td><button class="wear-delete" title="Save" onclick="saveWearEdit()" style="color:var(--accent2)">✓</button></td>
+      <td><button class="wear-delete" title="Cancel" onclick="cancelWearEdit()">✗</button></td>`;
+  }
+
+  function onEditChainChange(newChainId, fallbackCondition) {
+    const newChain = allChains.find(c => c.id === newChainId);
+    const bikeType = newChain?.bike_type || 'road';
+    const currentCond = document.getElementById('edit-cond-sel')?.value || fallbackCondition;
+    const sel = document.getElementById('edit-cond-sel');
+    if (sel) sel.innerHTML = buildConditionOptions(bikeType, currentCond);
+  }
+
+  async function saveWearEdit() {
+    if (!editingWear) return;
+    const { chainId, activityId } = editingWear;
+    const targetChainId = document.getElementById('edit-chain-sel')?.value;
+    const condition = document.getElementById('edit-cond-sel')?.value;
+    editingWear = null;
+    try {
+      const res = await fetch(
+        `${BASE}/chains/${encodeURIComponent(chainId)}/wear/${encodeURIComponent(activityId)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            condition: condition || null,
+            target_chain_id: targetChainId !== chainId ? targetChainId : null,
+          }),
+        }
+      );
+      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      await loadChains();
+      await renderWearTable(chainId);
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  function cancelWearEdit() {
+    if (!editingWear) return;
+    const { chainId } = editingWear;
+    editingWear = null;
+    renderWearTable(chainId);
   }
 
   async function addManualWear() {

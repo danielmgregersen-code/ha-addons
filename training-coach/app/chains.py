@@ -5,36 +5,60 @@ from datetime import datetime
 
 CHAINS_FILE = "/data/chains.json"
 
+# Condition → wear multiplier, keyed by bike type. These mirror the "Opslag"
+# lookup sheet, which maintains a separate condition set per bike type.
 CONDITION_MULTIPLIERS = {
-    "Home Trainer": 0.2,
-    "Tarmac": 0.8,
-    "Mostly Tarmac": 0.9,
-    "Standard Dry": 1.0,
-    "Intermittent Puddles": 1.5,
-    "Damp Roads": 2.0,
-    "Active Rain": 3.0,
-    "Heavy Mud": 4.0,
+    "gravel": {
+        "Home Trainer": 0.2,
+        "Tarmac": 0.75,
+        "Mostly Tarmac": 0.85,
+        "Standard Dry": 1.0,
+        "Pure Dust": 1.25,
+        "Intermittent Puddles": 1.5,
+        "Constant Rain": 2.5,
+        "Heavy Mud": 4.0,
+    },
+    "road": {
+        "Home Trainer": 0.3,
+        "Standard Dry": 1.0,
+        "Fast Group/intervals": 1.15,
+        "Damp Roads": 1.5,
+        "Active Rain": 2.5,
+    },
 }
 
 
-def infer_condition(sport_type: str, activity: dict) -> tuple[str, float]:
-    """Return (condition_name, multiplier) from activity sport type and weather data."""
+def conditions_for(bike_type: str) -> dict:
+    """Return the condition→multiplier map for a bike type (defaults to road)."""
+    return CONDITION_MULTIPLIERS.get(bike_type, CONDITION_MULTIPLIERS["road"])
+
+
+def infer_condition(sport_type: str, activity: dict, bike_type: str = "road") -> tuple[str, float]:
+    """Return (condition_name, multiplier) from activity sport type and weather data,
+    selecting from the condition set appropriate to the chain's bike type."""
+    table = conditions_for(bike_type)
+
     if sport_type in ("VirtualRide", "IndoorRide") or activity.get("trainer"):
-        return "Home Trainer", 0.2
+        return "Home Trainer", table["Home Trainer"]
 
     precip = activity.get("weather_precipitation") or 0
     humidity = activity.get("weather_humidity") or 0
 
-    if precip > 2.0:
-        return "Active Rain", 3.0
-    if precip > 0.1 or humidity > 85:
-        return "Damp Roads", 2.0
-    if humidity > 70:
-        return "Intermittent Puddles", 1.5
+    if bike_type == "gravel":
+        if precip > 2.0:
+            return "Constant Rain", table["Constant Rain"]
+        if precip > 0.1 or humidity > 85:
+            return "Intermittent Puddles", table["Intermittent Puddles"]
+        if humidity > 70:
+            return "Mostly Tarmac", table["Mostly Tarmac"]
+        return "Standard Dry", table["Standard Dry"]
 
-    if sport_type == "GravelRide":
-        return "Standard Dry", 1.0
-    return "Tarmac", 0.8
+    # road
+    if precip > 2.0:
+        return "Active Rain", table["Active Rain"]
+    if precip > 0.1 or humidity > 85:
+        return "Damp Roads", table["Damp Roads"]
+    return "Standard Dry", table["Standard Dry"]
 
 
 class ChainManager:
@@ -90,11 +114,11 @@ class ChainManager:
         with self._lock:
             return [self._compute_status(c) for c in self._data.get("chains", [])]
 
-    def get_gear_id_map(self) -> dict[str, str]:
-        """Return {gear_id: chain_id} for all active chains with a gear_id set."""
+    def get_gear_id_map(self) -> dict[str, dict]:
+        """Return {gear_id: {"id", "bike_type"}} for active chains with a gear_id set."""
         with self._lock:
             return {
-                c["gear_id"]: c["id"]
+                c["gear_id"]: {"id": c["id"], "bike_type": c.get("bike_type", "road")}
                 for c in self._data.get("chains", [])
                 if c.get("gear_id") and c.get("active", True)
             }
@@ -195,8 +219,6 @@ class ChainManager:
         duration_hours: float,
         condition: str,
     ) -> dict:
-        multiplier = CONDITION_MULTIPLIERS.get(condition, 1.0)
-        hours_consumed = round(duration_hours * multiplier, 4)
         manual_id = f"manual-{date}-{chain_id}-{int(duration_hours*100)}"
         with self._lock:
             chain = next(
@@ -204,6 +226,9 @@ class ChainManager:
             )
             if not chain:
                 raise ValueError(f"Chain {chain_id!r} not found")
+            # Resolve the multiplier from this chain's bike-type condition set.
+            multiplier = conditions_for(chain.get("bike_type", "road")).get(condition, 1.0)
+            hours_consumed = round(duration_hours * multiplier, 4)
             wear_log = chain.setdefault("wear_log", [])
             if any(e["activity_id"] == manual_id for e in wear_log):
                 return self._compute_status(chain)
@@ -231,3 +256,55 @@ class ChainManager:
             ]
             self._save()
             return self._compute_status(chain)
+
+    def update_wear_entry(
+        self,
+        chain_id: str,
+        activity_id: str,
+        new_condition: str = None,
+        new_chain_id: str = None,
+    ) -> dict:
+        """Update condition and/or move an entry to a different chain.
+        Recalculates hours_consumed from the target chain's bike_type multiplier table."""
+        with self._lock:
+            chain = next(
+                (c for c in self._data.get("chains", []) if c["id"] == chain_id), None
+            )
+            if not chain:
+                raise ValueError(f"Chain {chain_id!r} not found")
+            wear_log = chain.get("wear_log", [])
+            entry = next((e for e in wear_log if e["activity_id"] == activity_id), None)
+            if not entry:
+                raise ValueError(f"Wear entry {activity_id!r} not found on chain {chain_id!r}")
+
+            target_chain = chain
+            moving = new_chain_id and new_chain_id != chain_id
+            if moving:
+                target_chain = next(
+                    (c for c in self._data.get("chains", []) if c["id"] == new_chain_id), None
+                )
+                if not target_chain:
+                    raise ValueError(f"Target chain {new_chain_id!r} not found")
+
+            condition = new_condition or entry["condition"]
+            bike_type = target_chain.get("bike_type", "road")
+            multiplier = conditions_for(bike_type).get(condition, 1.0)
+            hours_consumed = round(entry["duration_hours"] * multiplier, 4)
+
+            updated = {**entry, "condition": condition, "multiplier": multiplier, "hours_consumed": hours_consumed}
+
+            if moving:
+                chain["wear_log"] = [e for e in wear_log if e["activity_id"] != activity_id]
+                # Remove any duplicate in target, then append
+                target_chain["wear_log"] = [
+                    e for e in target_chain.setdefault("wear_log", []) if e["activity_id"] != activity_id
+                ]
+                target_chain["wear_log"].append(updated)
+            else:
+                for i, e in enumerate(wear_log):
+                    if e["activity_id"] == activity_id:
+                        wear_log[i] = updated
+                        break
+
+            self._save()
+            return self._compute_status(target_chain)

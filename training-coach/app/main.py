@@ -365,13 +365,16 @@ async def auto_review_loop():
                 gear_id = activity.get("gear_id")
                 if gear_id and gear_id in gear_map:
                     try:
+                        chain_ref = gear_map[gear_id]
                         sport_type = activity.get("type") or ""
-                        condition, multiplier = infer_condition(sport_type, activity)
+                        condition, multiplier = infer_condition(
+                            sport_type, activity, chain_ref["bike_type"]
+                        )
                         chain_manager.log_activity_wear(
                             activity_id=str(activity["id"]),
                             activity_name=activity.get("name", "Unnamed activity"),
                             date=activity.get("date", ""),
-                            chain_id=gear_map[gear_id],
+                            chain_id=chain_ref["id"],
                             duration_seconds=activity.get("duration_seconds") or 0,
                             condition=condition,
                             multiplier=multiplier,
@@ -663,6 +666,10 @@ class ManualWearBody(BaseModel):
     duration_hours: float
     condition: str
 
+class UpdateWearBody(BaseModel):
+    condition: str = None
+    target_chain_id: str = None
+
 # ── Chain routes ──
 @app.get("/chains")
 def get_chains():
@@ -704,6 +711,15 @@ def log_manual_wear(chain_id: str, body: ManualWearBody):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+@app.patch("/chains/{chain_id}/wear/{activity_id:path}")
+def update_wear_entry(chain_id: str, activity_id: str, body: UpdateWearBody):
+    try:
+        return chain_manager.update_wear_entry(
+            chain_id, activity_id, body.condition, body.target_chain_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 @app.delete("/chains/{chain_id}/wear/{activity_id:path}")
 def delete_wear_entry(chain_id: str, activity_id: str):
     try:
@@ -713,7 +729,11 @@ def delete_wear_entry(chain_id: str, activity_id: str):
 
 @app.get("/chains/conditions")
 def get_conditions():
-    return {"conditions": list(CONDITION_MULTIPLIERS.keys()), "multipliers": CONDITION_MULTIPLIERS}
+    """Return condition→multiplier maps keyed by bike type (gravel/road)."""
+    return {
+        "by_bike_type": CONDITION_MULTIPLIERS,
+        "conditions": {bt: list(m.keys()) for bt, m in CONDITION_MULTIPLIERS.items()},
+    }
 
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
