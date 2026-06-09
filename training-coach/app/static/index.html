@@ -753,6 +753,16 @@
 
   function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   function escapeJs(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+  // Extract a readable message from an error response. FastAPI validation
+  // errors return `detail` as a list of objects, so stringify non-strings.
+  async function errDetail(res) {
+    try {
+      const d = (await res.json()).detail;
+      if (typeof d === 'string') return d;
+      if (Array.isArray(d)) return d.map(e => e.msg || JSON.stringify(e)).join('; ');
+      return d ? JSON.stringify(d) : 'Error';
+    } catch { return 'Error'; }
+  }
 
   function renderContent(role, text) {
     if (role === 'coach') return marked.parse(text, { breaks: true });
@@ -1212,7 +1222,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: today, note: '' }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
   }
@@ -1226,7 +1236,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: today, note: '' }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
   }
@@ -1270,7 +1280,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, name, bike_type: bikeType, interval_days: intervalDays }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       closeSealantDialog();
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
@@ -1298,7 +1308,7 @@
   async function setChainActive(chainId) {
     try {
       const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/active`, { method: 'POST' });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       const data = await res.json();
       allChains = data.chains || allChains;
       renderChainGrid();
@@ -1310,7 +1320,7 @@
     if (!confirm(`Retire "${name}"? It will be moved to the bottom and no longer receive auto-logged wear.`)) return;
     try {
       const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/retire`, { method: 'POST' });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
   }
@@ -1320,7 +1330,7 @@
     if (!confirm(`Restore "${name}"? It will move back to inactive — use "Set active" to start tracking rides on it.`)) return;
     try {
       const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/restore`, { method: 'POST' });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
   }
@@ -1406,7 +1416,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       closeChainDialog();
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
@@ -1537,7 +1547,7 @@
           }),
         }
       );
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
       await renderWearTable(chainId);
     } catch (e) { alert(`Error: ${e.message}`); }
@@ -1562,7 +1572,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date, duration_hours: hours, condition }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
       await renderWearTable(currentWearChainId);
       document.getElementById('wear-add-hours').value = '';
@@ -1573,7 +1583,7 @@
     if (!confirm('Remove this entry?')) return;
     try {
       const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/wear/${encodeURIComponent(activityId)}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
       await renderWearTable(chainId);
     } catch (e) { alert(`Error: ${e.message}`); }

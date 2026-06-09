@@ -648,29 +648,29 @@ def get_gear():
 # ── Chain models ──
 class ChainBody(BaseModel):
     id: str
-    name: str = None
-    gear_id: str = None
-    pm_serial: str = None
-    bike_type: str = None
-    base_wax_hours: float = None
-    active: bool = None
+    name: str | None = None
+    gear_id: str | None = None
+    pm_serial: str | None = None
+    bike_type: str | None = None
+    base_wax_hours: float | None = None
+    active: bool | None = None
 
 class WaxBody(BaseModel):
-    date: str = None
+    date: str | None = None
     note: str = ""
 
 class SealantBody(BaseModel):
-    date: str = None
+    date: str | None = None
     note: str = ""
 
 class SealantConfigBody(BaseModel):
     id: str
-    name: str = None
-    bike_type: str = None
-    interval_days: int = None
+    name: str | None = None
+    bike_type: str | None = None
+    interval_days: int | None = None
 
 class SealantCheckinBody(BaseModel):
-    date: str = None
+    date: str | None = None
     note: str = ""
 
 class ManualWearBody(BaseModel):
@@ -679,8 +679,8 @@ class ManualWearBody(BaseModel):
     condition: str
 
 class UpdateWearBody(BaseModel):
-    condition: str = None
-    target_chain_id: str = None
+    condition: str | None = None
+    target_chain_id: str | None = None
 
 # ── Chain routes ──
 @app.get("/chains")
