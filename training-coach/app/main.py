@@ -359,13 +359,14 @@ async def auto_review_loop():
             # 14 days covers the typical case of someone adding RPE a week late.
             # The coach_tick check below prevents re-reviewing already-done rides.
             new_activities = agent.icu.get_activities(days_back=14, group_keywords=agent.group_ride_keywords)
-            gear_map = chain_manager.get_gear_id_map()
             for activity in new_activities:
-                # Log chain wear for any activity whose gear_id matches a configured chain
-                gear_id = activity.get("gear_id")
-                if gear_id and gear_id in gear_map:
+                # Match by Strava gear_id or power meter serial, then log chain wear
+                chain_ref = chain_manager.match_activity(
+                    gear_id=activity.get("gear_id"),
+                    pm_serial=activity.get("power_meter_serial"),
+                )
+                if chain_ref:
                     try:
-                        chain_ref = gear_map[gear_id]
                         sport_type = activity.get("type") or ""
                         condition, multiplier = infer_condition(
                             sport_type, activity, chain_ref["bike_type"]
@@ -649,6 +650,7 @@ class ChainBody(BaseModel):
     id: str
     name: str = None
     gear_id: str = None
+    pm_serial: str = None
     bike_type: str = None
     base_wax_hours: float = None
     active: bool = None

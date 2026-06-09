@@ -334,11 +334,16 @@
       <input class="form-input" id="chain-name" placeholder="e.g. Grail 01.1" maxlength="40">
     </div>
     <div class="form-group">
-      <div class="form-label">Bike / gear</div>
+      <div class="form-label">Bike / gear (Strava)</div>
       <select class="form-select" id="chain-gear">
-        <option value="">— None / manual only —</option>
+        <option value="">— None —</option>
       </select>
-      <div class="form-hint">Rides on this bike will be tracked automatically</div>
+      <div class="form-hint">Requires Strava sync. Leave as None to match by power meter instead.</div>
+    </div>
+    <div class="form-group">
+      <div class="form-label">Power meter serial</div>
+      <input class="form-input" id="chain-pm-serial" placeholder="e.g. 7101398">
+      <div class="form-hint">Found in Intervals.icu under the activity's "PM Serial". Used to auto-match rides without Strava.</div>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -1066,7 +1071,11 @@
     const cardStateClass = retired ? ' retired-card' : pct > 50 ? '' : pct > 20 ? ' warn' : ' crit';
     const lastWax = c.last_wax_date || '—';
     const lastSealant = c.last_sealant_date || '—';
-    const gearLabel = c.gear_id || 'No gear linked';
+    const gearLabel = c.gear_id
+      ? c.gear_id
+      : c.pm_serial
+        ? 'PM ' + c.pm_serial
+        : 'No bike linked';
     const sid = escapeJs(c.id);
 
     const badge = retired
@@ -1195,6 +1204,7 @@
     document.getElementById('chain-dialog-title').textContent = 'Add chain';
     document.getElementById('chain-edit-id').value = '';
     document.getElementById('chain-name').value = '';
+    document.getElementById('chain-pm-serial').value = '';
     document.getElementById('chain-bike-type').value = 'road';
     document.getElementById('chain-base-hours').value = '16';
     await populateGearDropdown('');
@@ -1208,6 +1218,7 @@
     document.getElementById('chain-dialog-title').textContent = 'Edit chain';
     document.getElementById('chain-edit-id').value = chain.id;
     document.getElementById('chain-name').value = chain.name;
+    document.getElementById('chain-pm-serial').value = chain.pm_serial || '';
     document.getElementById('chain-bike-type').value = chain.bike_type || 'road';
     document.getElementById('chain-base-hours').value = chain.base_wax_hours || 12;
     await populateGearDropdown(chain.gear_id || '');
@@ -1260,6 +1271,7 @@
       id,
       name,
       gear_id: document.getElementById('chain-gear').value || '',
+      pm_serial: document.getElementById('chain-pm-serial').value.trim() || '',
       bike_type: document.getElementById('chain-bike-type').value,
       base_wax_hours: parseFloat(document.getElementById('chain-base-hours').value) || 12,
     };
