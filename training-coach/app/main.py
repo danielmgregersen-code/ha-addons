@@ -663,6 +663,16 @@ class SealantBody(BaseModel):
     date: str = None
     note: str = ""
 
+class SealantConfigBody(BaseModel):
+    id: str
+    name: str = None
+    bike_type: str = None
+    interval_days: int = None
+
+class SealantCheckinBody(BaseModel):
+    date: str = None
+    note: str = ""
+
 class ManualWearBody(BaseModel):
     date: str
     duration_hours: float
@@ -675,7 +685,7 @@ class UpdateWearBody(BaseModel):
 # ── Chain routes ──
 @app.get("/chains")
 def get_chains():
-    return {"chains": chain_manager.get_all()}
+    return {"chains": chain_manager.get_all(), "sealants": chain_manager.get_all_sealants()}
 
 @app.post("/chains")
 def upsert_chain(body: ChainBody):
@@ -747,6 +757,29 @@ def update_wear_entry(chain_id: str, activity_id: str, body: UpdateWearBody):
 def delete_wear_entry(chain_id: str, activity_id: str):
     try:
         return chain_manager.delete_wear_entry(chain_id, activity_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.get("/sealants")
+def get_sealants():
+    return {"sealants": chain_manager.get_all_sealants()}
+
+@app.post("/sealants")
+def upsert_sealant(body: SealantConfigBody):
+    try:
+        return chain_manager.upsert_sealant(body.model_dump(exclude_none=False))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/sealants/{sealant_id}")
+def delete_sealant(sealant_id: str):
+    chain_manager.delete_sealant(sealant_id)
+    return {"deleted": sealant_id}
+
+@app.post("/sealants/{sealant_id}/checkin")
+def log_sealant_checkin(sealant_id: str, body: SealantCheckinBody):
+    try:
+        return chain_manager.log_sealant_checkin(sealant_id, body.date, body.note)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

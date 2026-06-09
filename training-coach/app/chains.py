@@ -1,7 +1,7 @@
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, date as date_type
 
 CHAINS_FILE = "/data/chains.json"
 
@@ -97,9 +97,6 @@ class ChainManager:
 
         hours_remaining = max(0.0, base - hours_consumed)
         pct_remaining = (hours_remaining / base * 100) if base > 0 else 0
-        last_sealant_date = max(
-            (e["date"] for e in chain.get("sealant_events", [])), default=None
-        )
 
         return {
             **chain,
@@ -107,7 +104,23 @@ class ChainManager:
             "hours_remaining": round(hours_remaining, 2),
             "pct_remaining": round(pct_remaining, 1),
             "last_wax_date": last_wax_date,
-            "last_sealant_date": last_sealant_date,
+        }
+
+    def _compute_sealant_status(self, s: dict) -> dict:
+        events = s.get("events", [])
+        last_checkin = max((e["date"] for e in events), default=None)
+        interval_days = s.get("interval_days", 90)
+        if last_checkin:
+            days_since = (date_type.today() - date_type.fromisoformat(last_checkin)).days
+        else:
+            days_since = None
+        pct_elapsed = round(days_since / interval_days * 100, 1) if (days_since is not None and interval_days > 0) else 0
+        return {
+            **s,
+            "last_checkin": last_checkin,
+            "days_since": days_since,
+            "pct_elapsed": min(pct_elapsed, 100),
+            "overdue": days_since is not None and days_since > interval_days,
         }
 
     def get_all(self) -> list[dict]:
@@ -321,6 +334,55 @@ class ChainManager:
             ]
             self._save()
             return self._compute_status(chain)
+
+    # ── Sealant tracking (calendar-based, per bike section) ──────────────────
+
+    def get_all_sealants(self) -> list[dict]:
+        with self._lock:
+            return [self._compute_sealant_status(s) for s in self._data.get("sealants", [])]
+
+    def upsert_sealant(self, data: dict) -> dict:
+        """Create or update a sealant entry. data must include 'id'."""
+        with self._lock:
+            sealants = self._data.setdefault("sealants", [])
+            existing = next((s for s in sealants if s["id"] == data["id"]), None)
+            if existing:
+                for k, v in data.items():
+                    if v is not None:
+                        existing[k] = v
+                target = existing
+            else:
+                target = {
+                    "id": data["id"],
+                    "name": data.get("name", data["id"]),
+                    "bike_type": data.get("bike_type", "road"),
+                    "interval_days": data.get("interval_days", 90),
+                    "events": [],
+                }
+                sealants.append(target)
+            self._save()
+            return self._compute_sealant_status(target)
+
+    def delete_sealant(self, sealant_id: str):
+        with self._lock:
+            self._data["sealants"] = [
+                s for s in self._data.get("sealants", []) if s["id"] != sealant_id
+            ]
+            self._save()
+
+    def log_sealant_checkin(self, sealant_id: str, date: str = None, note: str = "") -> dict:
+        date = date or datetime.now().strftime("%Y-%m-%d")
+        with self._lock:
+            sealant = next(
+                (s for s in self._data.get("sealants", []) if s["id"] == sealant_id), None
+            )
+            if not sealant:
+                raise ValueError(f"Sealant {sealant_id!r} not found")
+            sealant.setdefault("events", []).append({"date": date, "note": note})
+            self._save()
+            return self._compute_sealant_status(sealant)
+
+    # ─────────────────────────────────────────────────────────────────────────
 
     def update_wear_entry(
         self,
