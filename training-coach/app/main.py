@@ -365,13 +365,16 @@ async def auto_review_loop():
                 gear_id = activity.get("gear_id")
                 if gear_id and gear_id in gear_map:
                     try:
+                        chain_ref = gear_map[gear_id]
                         sport_type = activity.get("type") or ""
-                        condition, multiplier = infer_condition(sport_type, activity)
+                        condition, multiplier = infer_condition(
+                            sport_type, activity, chain_ref["bike_type"]
+                        )
                         chain_manager.log_activity_wear(
                             activity_id=str(activity["id"]),
                             activity_name=activity.get("name", "Unnamed activity"),
                             date=activity.get("date", ""),
-                            chain_id=gear_map[gear_id],
+                            chain_id=chain_ref["id"],
                             duration_seconds=activity.get("duration_seconds") or 0,
                             condition=condition,
                             multiplier=multiplier,
@@ -713,7 +716,11 @@ def delete_wear_entry(chain_id: str, activity_id: str):
 
 @app.get("/chains/conditions")
 def get_conditions():
-    return {"conditions": list(CONDITION_MULTIPLIERS.keys()), "multipliers": CONDITION_MULTIPLIERS}
+    """Return condition→multiplier maps keyed by bike type (gravel/road)."""
+    return {
+        "by_bike_type": CONDITION_MULTIPLIERS,
+        "conditions": {bt: list(m.keys()) for bt, m in CONDITION_MULTIPLIERS.items()},
+    }
 
 
 app.mount("/static", StaticFiles(directory="static"), name="static")

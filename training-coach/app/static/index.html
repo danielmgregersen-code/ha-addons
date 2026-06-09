@@ -1194,26 +1194,29 @@
     document.getElementById('wear-dialog-title').textContent = `Ride log — ${chainName}`;
     document.getElementById('wear-add-date').value = new Date().toISOString().slice(0, 10);
     document.getElementById('wear-add-hours').value = '';
-    await populateConditionDropdown();
+    const bikeType = allChains.find(c => c.id === chainId)?.bike_type || 'road';
+    await populateConditionDropdown(bikeType);
     await renderWearTable(chainId);
     document.getElementById('wear-dialog-overlay').classList.add('open');
   }
 
-  async function populateConditionDropdown() {
+  let conditionsByBikeType = null;
+
+  async function populateConditionDropdown(bikeType) {
     const sel = document.getElementById('wear-add-condition');
-    if (sel.options.length > 1) return;
     sel.innerHTML = '';
     try {
-      const res = await fetch(`${BASE}/chains/conditions`);
-      if (res.ok) {
-        const data = await res.json();
-        (data.conditions || []).forEach(c => {
-          const opt = document.createElement('option');
-          opt.value = c; opt.textContent = c;
-          if (c === 'Standard Dry') opt.selected = true;
-          sel.appendChild(opt);
-        });
+      if (!conditionsByBikeType) {
+        const res = await fetch(`${BASE}/chains/conditions`);
+        if (res.ok) conditionsByBikeType = (await res.json()).conditions || {};
       }
+      const conditions = (conditionsByBikeType && conditionsByBikeType[bikeType]) || [];
+      conditions.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c; opt.textContent = c;
+        if (c === 'Standard Dry') opt.selected = true;
+        sel.appendChild(opt);
+      });
     } catch {}
   }
 
