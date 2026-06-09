@@ -200,6 +200,22 @@
   .chain-progress-label { display: flex; justify-content: space-between; font-size: 11px; }
   .chain-progress-label .hours { color: var(--text); font-weight: 500; }
   .chain-progress-label .pct { color: var(--muted); }
+  /* ── Sealant strip ── */
+  .sealant-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .sealant-chip { display: flex; align-items: center; gap: 5px; background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; padding: 3px 8px 3px 10px; font-size: 11px; }
+  .sealant-chip.warn { border-color: #e8a84a; }
+  .sealant-chip.overdue { border-color: #f06060; background: rgba(240,96,96,0.08); }
+  .sealant-chip-label { color: var(--text); white-space: nowrap; }
+  .sealant-chip-bar-wrap { width: 40px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .sealant-chip-bar { height: 100%; background: var(--accent2); border-radius: 2px; transition: width 0.3s; }
+  .sealant-chip.warn .sealant-chip-bar { background: #e8a84a; }
+  .sealant-chip.overdue .sealant-chip-bar { background: #f06060; }
+  .sealant-chip-since { color: var(--muted); font-size: 10px; white-space: nowrap; }
+  .sealant-chip-btn { background: none; border: none; color: var(--muted); font-size: 13px; cursor: pointer; padding: 0 2px; line-height: 1; transition: color 0.15s; }
+  .sealant-chip-btn:hover { color: var(--accent); }
+  .sealant-add-btn { background: none; border: 1px dashed var(--border); color: var(--muted); font-family: 'DM Mono', monospace; font-size: 10px; padding: 3px 9px; border-radius: 20px; cursor: pointer; transition: all 0.15s; }
+  .sealant-add-btn:hover { border-color: var(--accent); color: var(--accent); }
+
   .chain-dates { display: flex; flex-direction: column; gap: 3px; }
   .chain-date-row { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; }
   .chain-date-row .label { color: var(--muted); }
@@ -361,6 +377,38 @@
     <div class="dialog-btns">
       <button class="btn-cancel" onclick="closeChainDialog()">Cancel</button>
       <button class="btn-create" onclick="saveChain()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Sealant add/edit dialog -->
+<div class="dialog-overlay" id="sealant-dialog-overlay" style="display:none">
+  <div class="chain-dialog">
+    <h3 id="sealant-dialog-title">Add sealant tracker</h3>
+    <input type="hidden" id="sealant-edit-id">
+    <div class="form-group">
+      <div class="form-label">Name</div>
+      <input class="form-input" id="sealant-name" placeholder="e.g. Grail tubeless" maxlength="40">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <div class="form-label">Bike type</div>
+        <select class="form-select" id="sealant-bike-type">
+          <option value="road">Road</option>
+          <option value="gravel">Gravel</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Check interval (days)</div>
+        <input class="form-input" type="number" id="sealant-interval" value="90" min="7" max="365" step="1">
+      </div>
+    </div>
+    <div class="dialog-btns" style="justify-content:space-between">
+      <button class="btn-cancel danger" id="sealant-delete-btn" onclick="deleteSealant(document.getElementById('sealant-edit-id').value)" style="display:none">Delete</button>
+      <div style="display:flex;gap:8px;margin-left:auto">
+        <button class="btn-cancel" onclick="closeSealantDialog()">Cancel</button>
+        <button class="btn-create" onclick="saveSealant()">Save</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1016,6 +1064,7 @@
   // ── Chain management ──
 
   let allChains = [];
+  let allSealants = [];
   let currentWearChainId = null;
   let gearList = [];
 
@@ -1025,6 +1074,7 @@
       if (!res.ok) throw new Error();
       const data = await res.json();
       allChains = data.chains || [];
+      allSealants = data.sealants || [];
       renderChainGrid();
     } catch {
       document.getElementById('chain-sections').innerHTML =
@@ -1054,6 +1104,7 @@
           <div class="chain-section-header">
             <span class="chain-section-title">${labels[bt]}</span>
           </div>
+          ${renderSealantStrip(bt)}
           <div class="chain-grid">
             ${sorted.map(c => renderChainCard(c)).join('')}
           </div>
@@ -1070,7 +1121,6 @@
     const barClass = retired ? 'crit' : pct > 50 ? 'good' : pct > 20 ? 'warn' : 'crit';
     const cardStateClass = retired ? ' retired-card' : pct > 50 ? '' : pct > 20 ? ' warn' : ' crit';
     const lastWax = c.last_wax_date || '—';
-    const lastSealant = c.last_sealant_date || '—';
     const gearLabel = c.gear_id
       ? c.gear_id
       : c.pm_serial
@@ -1093,7 +1143,6 @@
     } else if (active) {
       btns = `
         <button class="btn-sm primary" onclick="logWax('${sid}')">Log wax</button>
-        <button class="btn-sm accent2" onclick="logSealant('${sid}')">Log sealant</button>
         <button class="btn-sm" onclick="openWearLog('${sid}')">Ride log</button>
         <button class="btn-sm danger" onclick="retireChain('${sid}')">Retire</button>`;
     } else {
@@ -1127,10 +1176,31 @@
         </div>
         <div class="chain-dates">
           <div class="chain-date-row"><span class="label">Last wax</span><span class="val">${escapeHtml(lastWax)}</span></div>
-          <div class="chain-date-row"><span class="label">Last sealant</span><span class="val">${escapeHtml(lastSealant)}</span></div>
         </div>
         <div class="chain-btns" style="flex-wrap:wrap;align-items:center">${btns}</div>
       </div>`;
+  }
+
+  function renderSealantStrip(bikeType) {
+    const sealants = allSealants.filter(s => (s.bike_type || 'road') === bikeType);
+    const chips = sealants.map(s => {
+      const pct = s.pct_elapsed ?? 0;
+      const overdue = s.overdue;
+      const chipClass = overdue ? 'sealant-chip overdue' : pct > 75 ? 'sealant-chip warn' : 'sealant-chip';
+      const since = s.days_since != null ? `${s.days_since}d ago` : 'never';
+      const sid = escapeJs(s.id);
+      return `<div class="${chipClass}" title="${escapeHtml(s.name)} — last checked ${since} / interval ${s.interval_days}d">
+        <span class="sealant-chip-label">${escapeHtml(s.name)}</span>
+        <div class="sealant-chip-bar-wrap"><div class="sealant-chip-bar" style="width:${pct}%"></div></div>
+        <span class="sealant-chip-since">${escapeHtml(since)}</span>
+        <button class="sealant-chip-btn" onclick="logSealantCheckin('${sid}')" title="Log check-in">✓</button>
+        <button class="sealant-chip-btn" onclick="openEditSealant('${sid}')" title="Edit">✎</button>
+      </div>`;
+    }).join('');
+    return `<div class="sealant-strip">
+      ${chips}
+      <button class="sealant-add-btn" onclick="openAddSealant('${escapeJs(bikeType)}')">+ Sealant</button>
+    </div>`;
   }
 
   async function logWax(chainId) {
@@ -1147,16 +1217,71 @@
     } catch (e) { alert(`Error: ${e.message}`); }
   }
 
-  async function logSealant(chainId) {
+  async function logSealantCheckin(sealantId) {
     const today = new Date().toISOString().slice(0, 10);
-    if (!confirm(`Log sealant replacement for today (${today})?`)) return;
+    if (!confirm(`Log sealant check-in for today (${today})?`)) return;
     try {
-      const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/sealant`, {
+      const res = await fetch(`${BASE}/sealants/${encodeURIComponent(sealantId)}/checkin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: today, note: '' }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      await loadChains();
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  function openAddSealant(bikeType) {
+    document.getElementById('sealant-edit-id').value = '';
+    document.getElementById('sealant-dialog-title').textContent = 'Add sealant tracker';
+    document.getElementById('sealant-name').value = '';
+    document.getElementById('sealant-bike-type').value = bikeType || 'road';
+    document.getElementById('sealant-interval').value = '90';
+    document.getElementById('sealant-delete-btn').style.display = 'none';
+    document.getElementById('sealant-dialog-overlay').style.display = 'flex';
+  }
+
+  function openEditSealant(sealantId) {
+    const s = allSealants.find(x => x.id === sealantId);
+    if (!s) return;
+    document.getElementById('sealant-edit-id').value = s.id;
+    document.getElementById('sealant-dialog-title').textContent = 'Edit sealant tracker';
+    document.getElementById('sealant-name').value = s.name || '';
+    document.getElementById('sealant-bike-type').value = s.bike_type || 'road';
+    document.getElementById('sealant-interval').value = s.interval_days ?? 90;
+    document.getElementById('sealant-delete-btn').style.display = '';
+    document.getElementById('sealant-dialog-overlay').style.display = 'flex';
+  }
+
+  function closeSealantDialog() {
+    document.getElementById('sealant-dialog-overlay').style.display = 'none';
+  }
+
+  async function saveSealant() {
+    const editId = document.getElementById('sealant-edit-id').value.trim();
+    const name = document.getElementById('sealant-name').value.trim();
+    const bikeType = document.getElementById('sealant-bike-type').value;
+    const intervalDays = parseInt(document.getElementById('sealant-interval').value, 10);
+    if (!name) { alert('Name is required.'); return; }
+    const id = editId || name.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '_' + Date.now();
+    try {
+      const res = await fetch(`${BASE}/sealants`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, name, bike_type: bikeType, interval_days: intervalDays }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      closeSealantDialog();
+      await loadChains();
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  async function deleteSealant(sealantId) {
+    const s = allSealants.find(x => x.id === sealantId);
+    if (!confirm(`Delete sealant tracker "${s?.name || sealantId}"?`)) return;
+    try {
+      await fetch(`${BASE}/sealants/${encodeURIComponent(sealantId)}`, { method: 'DELETE' });
+      closeSealantDialog();
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
   }
