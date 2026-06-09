@@ -427,8 +427,50 @@ async def auto_review_loop():
                     sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
 
                 print(f"Auto-review done for {activity.get('id')}", flush=True)
+
+            # After processing rides (and after sealant calendar ticks), fire
+            # any newly-crossed wax/sealant life thresholds (25% and 0%).
+            await dispatch_chain_alerts()
         except Exception as e:
             print(f"Auto-review error: {e}", flush=True)
+
+
+async def dispatch_chain_alerts():
+    """Turn newly-crossed chain/sealant life thresholds into notifications
+    (in-app banner + HA push)."""
+    for alert in chain_manager.check_threshold_alerts():
+        kind, level, name = alert["kind"], alert["level"], alert["name"]
+        if kind == "wax":
+            if level == 25:
+                title = "Chain wax low"
+                body = f"{name}: ~25% wax life left — plan a re-wax."
+            else:
+                title = "Chain wax depleted"
+                body = f"{name}: wax life used up — re-wax now."
+            notif_type = "wax_alert"
+        else:
+            if level == 25:
+                title = "Sealant check due soon"
+                body = f"{name}: ~25% of the sealant interval left — check/top off soon."
+            else:
+                title = "Sealant overdue"
+                body = f"{name}: sealant interval elapsed — check/top off now."
+            notif_type = "sealant_alert"
+        now = datetime.now()
+        notif = {
+            "id": f"{kind}-{level}-{alert['id']}-{int(now.timestamp())}",
+            "timestamp": now.isoformat(),
+            "activity_name": name,
+            "activity_date": now.strftime("%Y-%m-%d"),
+            "comment": body,
+            "type": notif_type,
+            "seen": False,
+        }
+        with notifications_lock:
+            notifications[notif["id"]] = notif
+            save_notifications(notifications)
+        await send_ha_notification(title, body)
+        print(f"Chain alert: {notif['id']}", flush=True)
 
 
 @asynccontextmanager
