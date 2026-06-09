@@ -173,6 +173,77 @@
   #send-btn:active { transform: scale(0.97); }
   #send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
   #send-btn svg { width: 18px; height: 18px; color: #0d0f14; }
+
+  /* ── Maintenance panel ── */
+  #maintenance-panel { flex: 1; overflow-y: auto; padding: 20px 24px; display: none; flex-direction: column; gap: 20px; }
+  #maintenance-panel::-webkit-scrollbar { width: 4px; }
+  #maintenance-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .maint-header { display: flex; align-items: center; justify-content: space-between; }
+  .maint-title { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 16px; color: var(--text); }
+  .chain-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+  .chain-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 10px; transition: border-color 0.15s; }
+  .chain-card:hover { border-color: var(--accent); }
+  .chain-card.warn { border-color: #f0a040; }
+  .chain-card.crit { border-color: #f06060; }
+  .chain-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .chain-card-name { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px; color: var(--text); }
+  .chain-card-meta { font-size: 10px; color: var(--muted); margin-top: 2px; letter-spacing: 0.04em; }
+  .chain-card-actions-top { display: flex; gap: 4px; flex-shrink: 0; }
+  .btn-icon { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 13px; transition: all 0.15s; }
+  .btn-icon:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-icon.danger:hover { border-color: #f06060; color: #f06060; }
+  .chain-progress-wrap { background: var(--surface2); border-radius: 4px; height: 6px; overflow: hidden; }
+  .chain-progress-bar { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+  .chain-progress-bar.good { background: var(--accent2); }
+  .chain-progress-bar.warn { background: var(--accent); }
+  .chain-progress-bar.crit { background: #f06060; }
+  .chain-progress-label { display: flex; justify-content: space-between; font-size: 11px; }
+  .chain-progress-label .hours { color: var(--text); font-weight: 500; }
+  .chain-progress-label .pct { color: var(--muted); }
+  .chain-dates { display: flex; flex-direction: column; gap: 3px; }
+  .chain-date-row { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; }
+  .chain-date-row .label { color: var(--muted); }
+  .chain-date-row .val { color: var(--text); }
+  .chain-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn-sm { font-family: 'DM Mono', monospace; font-size: 11px; padding: 5px 12px; border-radius: 6px; cursor: pointer; border: 1px solid var(--border); background: none; color: var(--muted); transition: all 0.15s; white-space: nowrap; }
+  .btn-sm:hover { border-color: var(--text); color: var(--text); }
+  .btn-sm.primary { background: var(--accent); border-color: var(--accent); color: #0d0f14; }
+  .btn-sm.primary:hover { opacity: 0.85; }
+  .btn-sm.accent2 { border-color: var(--accent2); color: var(--accent2); }
+  .btn-sm.accent2:hover { background: rgba(74, 240, 160, 0.1); }
+  .btn-add-chain { font-family: 'DM Mono', monospace; font-size: 12px; padding: 7px 16px; border-radius: 8px; cursor: pointer; border: 1px dashed var(--border); background: none; color: var(--muted); transition: all 0.15s; display: flex; align-items: center; gap: 6px; }
+  .btn-add-chain:hover { border-color: var(--accent); color: var(--accent); }
+  .empty-maint { text-align: center; padding: 60px 20px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+  .empty-maint-icon { font-size: 36px; margin-bottom: 12px; }
+
+  /* Chain dialog */
+  .chain-dialog { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; width: 340px; display: flex; flex-direction: column; gap: 14px; max-height: 90vh; overflow-y: auto; }
+  .chain-dialog h3 { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px; color: var(--text); }
+  .form-group { display: flex; flex-direction: column; gap: 5px; }
+  .form-label { font-size: 10px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  .form-input { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 13px; outline: none; transition: border-color 0.15s; }
+  .form-input:focus { border-color: var(--accent); }
+  .form-select { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 13px; outline: none; appearance: none; cursor: pointer; }
+  .form-select:focus { border-color: var(--accent); }
+  .form-row { display: flex; gap: 10px; }
+  .form-row .form-group { flex: 1; }
+  .form-hint { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+  /* Wear log dialog */
+  .wear-dialog { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; width: min(600px, 95vw); display: flex; flex-direction: column; gap: 14px; max-height: 85vh; }
+  .wear-dialog h3 { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px; color: var(--text); }
+  .wear-table-wrap { overflow-y: auto; flex: 1; }
+  .wear-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .wear-table th { text-align: left; padding: 6px 10px; color: var(--muted); font-weight: 400; border-bottom: 1px solid var(--border); letter-spacing: 0.06em; text-transform: uppercase; font-size: 10px; }
+  .wear-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: middle; }
+  .wear-table tr:last-child td { border-bottom: none; }
+  .wear-table tr:hover td { background: var(--surface2); }
+  .wear-delete { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 2px; transition: color 0.12s; }
+  .wear-delete:hover { color: #f06060; }
+  .wear-empty { text-align: center; padding: 30px; color: var(--muted); font-size: 12px; }
+  .wear-add-form { border-top: 1px solid var(--border); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .wear-add-row { display: flex; gap: 8px; align-items: flex-end; }
+  .wear-add-row .form-group { flex: 1; }
 </style>
 </head>
 <body>
@@ -219,6 +290,13 @@
       </button>
     </div>
   </div>
+  <div id="maintenance-panel">
+    <div class="maint-header">
+      <span class="maint-title">Chain Wax Tracker</span>
+      <button class="btn-add-chain" onclick="openAddChain()">+ Add chain</button>
+    </div>
+    <div class="chain-grid" id="chain-grid"></div>
+  </div>
 </div>
 
 <div id="notif-banner"></div>
@@ -230,6 +308,86 @@
     <div class="dialog-btns">
       <button class="btn-cancel" id="dialog-cancel">Cancel</button>
       <button class="btn-create" id="dialog-create">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Chain add/edit dialog -->
+<div class="dialog-overlay" id="chain-dialog-overlay">
+  <div class="chain-dialog">
+    <h3 id="chain-dialog-title">Add chain</h3>
+    <input type="hidden" id="chain-edit-id">
+    <div class="form-group">
+      <div class="form-label">Chain name</div>
+      <input class="form-input" id="chain-name" placeholder="e.g. Grail 01.1" maxlength="40">
+    </div>
+    <div class="form-group">
+      <div class="form-label">Bike / gear</div>
+      <select class="form-select" id="chain-gear">
+        <option value="">— None / manual only —</option>
+      </select>
+      <div class="form-hint">Rides on this bike will be tracked automatically</div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <div class="form-label">Bike type</div>
+        <select class="form-select" id="chain-bike-type" onchange="chainBikeTypeChanged()">
+          <option value="road">Road</option>
+          <option value="gravel">Gravel</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Base wax hours</div>
+        <input class="form-input" type="number" id="chain-base-hours" value="12" min="1" max="100" step="0.5">
+      </div>
+    </div>
+    <div class="dialog-btns">
+      <button class="btn-cancel" onclick="closeChainDialog()">Cancel</button>
+      <button class="btn-create" onclick="saveChain()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Wear log dialog -->
+<div class="dialog-overlay" id="wear-dialog-overlay">
+  <div class="wear-dialog">
+    <h3 id="wear-dialog-title">Wear log</h3>
+    <div class="wear-table-wrap">
+      <table class="wear-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Activity</th>
+            <th>Condition</th>
+            <th>Hrs</th>
+            <th>×</th>
+            <th>Consumed</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="wear-table-body"></tbody>
+      </table>
+    </div>
+    <div class="wear-add-form">
+      <div style="font-size:10px;color:var(--muted);letter-spacing:0.08em;text-transform:uppercase">Add manual entry</div>
+      <div class="wear-add-row">
+        <div class="form-group">
+          <div class="form-label">Date</div>
+          <input class="form-input" type="date" id="wear-add-date">
+        </div>
+        <div class="form-group">
+          <div class="form-label">Hours</div>
+          <input class="form-input" type="number" id="wear-add-hours" placeholder="2.5" min="0.1" step="0.1">
+        </div>
+        <div class="form-group">
+          <div class="form-label">Condition</div>
+          <select class="form-select" id="wear-add-condition"></select>
+        </div>
+        <button class="btn-sm primary" onclick="addManualWear()" style="flex-shrink:0;align-self:flex-end">Add</button>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end">
+      <button class="btn-sm" onclick="closeWearDialog()">Close</button>
     </div>
   </div>
 </div>
@@ -287,9 +445,10 @@
 
   function renderTabs() {
     const modes = [
-      { id: 'review',   label: 'Review' },
-      { id: 'health',   label: 'Health' },
-      { id: 'planning', label: 'Planning' },
+      { id: 'review',      label: 'Review' },
+      { id: 'health',      label: 'Health' },
+      { id: 'planning',    label: 'Planning' },
+      { id: 'maintenance', label: 'Maintenance' },
     ];
     tabBarEl.innerHTML = modes.map(m => {
       const count = unreadByTab[m.id] || 0;
@@ -299,13 +458,29 @@
     }).join('');
   }
 
+  function updatePanelVisibility() {
+    const isMaint = activeMode === 'maintenance';
+    document.querySelector('.chat-area').style.display = isMaint ? 'none' : 'flex';
+    document.getElementById('sidebar').style.display = isMaint ? 'none' : 'flex';
+    document.getElementById('maintenance-panel').style.display = isMaint ? 'flex' : 'none';
+    document.getElementById('clear-btn').style.display = isMaint ? 'none' : '';
+    document.getElementById('sidebar-toggle').style.display = isMaint ? 'none' : '';
+  }
+
   async function switchMode(mode) {
-    if (mode === activeMode && currentSessionId) return;
+    if (mode === activeMode && (currentSessionId || mode === 'maintenance')) return;
     activeMode = mode;
     localStorage.setItem('activeMode', mode);
     // Reset tab badge when entering the tab
     if (unreadByTab[mode] !== undefined) unreadByTab[mode] = 0;
     renderTabs();
+    updatePanelVisibility();
+
+    if (mode === 'maintenance') {
+      currentSessionId = null;
+      loadChains();
+      return;
+    }
 
     const sessions = ensureSessionForMode(mode);
     const lastId = localStorage.getItem('lastSession_' + mode);
@@ -510,7 +685,8 @@
 
   // ── Utilities ──
 
-  function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function escapeJs(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 
   function renderContent(role, text) {
     if (role === 'coach') return marked.parse(text, { breaks: true });
@@ -819,12 +995,301 @@
     }
   };
 
+  // ── Chain management ──
+
+  let allChains = [];
+  let currentWearChainId = null;
+  let gearList = [];
+
+  async function loadChains() {
+    try {
+      const res = await fetch(`${BASE}/chains`);
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      allChains = data.chains || [];
+      renderChainGrid();
+    } catch {
+      document.getElementById('chain-grid').innerHTML =
+        '<div class="empty-maint"><div class="empty-maint-icon">⚠</div>Could not load chains.</div>';
+    }
+  }
+
+  function renderChainGrid() {
+    const grid = document.getElementById('chain-grid');
+    if (!allChains.length) {
+      grid.innerHTML = '<div class="empty-maint" style="grid-column:1/-1"><div class="empty-maint-icon">🔗</div>No chains yet.<br>Add a chain to start tracking wax wear.</div>';
+      return;
+    }
+    grid.innerHTML = allChains.map(c => renderChainCard(c)).join('');
+  }
+
+  function renderChainCard(c) {
+    const pct = c.pct_remaining ?? 100;
+    const remaining = c.hours_remaining ?? c.base_wax_hours;
+    const base = c.base_wax_hours || 12;
+    const barClass = pct > 50 ? 'good' : pct > 20 ? 'warn' : 'crit';
+    const cardClass = pct > 50 ? '' : pct > 20 ? ' warn' : ' crit';
+    const lastWax = c.last_wax_date || '—';
+    const lastSealant = c.last_sealant_date || '—';
+    const gearLabel = c.gear_id ? c.gear_id : 'No gear linked';
+    const bikeLabel = c.bike_type === 'gravel' ? 'Gravel' : 'Road';
+    const sid = escapeJs(c.id);
+    return `
+      <div class="chain-card${cardClass}" data-chain-id="${escapeHtml(c.id)}">
+        <div class="chain-card-top">
+          <div>
+            <div class="chain-card-name">${escapeHtml(c.name)}</div>
+            <div class="chain-card-meta">${bikeLabel} · ${escapeHtml(gearLabel)}</div>
+          </div>
+          <div class="chain-card-actions-top">
+            <button class="btn-icon" title="Edit" onclick="openEditChain('${sid}')">✎</button>
+            <button class="btn-icon danger" title="Delete" onclick="deleteChain('${sid}')">×</button>
+          </div>
+        </div>
+        <div>
+          <div class="chain-progress-wrap">
+            <div class="chain-progress-bar ${barClass}" style="width:${pct}%"></div>
+          </div>
+          <div class="chain-progress-label">
+            <span class="hours">${remaining.toFixed(1)}h remaining</span>
+            <span class="pct">${pct.toFixed(0)}% of ${base}h</span>
+          </div>
+        </div>
+        <div class="chain-dates">
+          <div class="chain-date-row"><span class="label">Last wax</span><span class="val">${escapeHtml(lastWax)}</span></div>
+          <div class="chain-date-row"><span class="label">Last sealant</span><span class="val">${escapeHtml(lastSealant)}</span></div>
+        </div>
+        <div class="chain-btns">
+          <button class="btn-sm primary" onclick="logWax('${sid}')">Log wax</button>
+          <button class="btn-sm accent2" onclick="logSealant('${sid}')">Log sealant</button>
+          <button class="btn-sm" onclick="openWearLog('${sid}')">Ride log</button>
+        </div>
+      </div>`;
+  }
+
+  async function logWax(chainId) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (!confirm(`Log wax event for today (${today})?`)) return;
+    try {
+      const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/wax`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: today, note: '' }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      await loadChains();
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  async function logSealant(chainId) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (!confirm(`Log sealant replacement for today (${today})?`)) return;
+    try {
+      const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/sealant`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: today, note: '' }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      await loadChains();
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  async function deleteChain(chainId) {
+    const name = allChains.find(c => c.id === chainId)?.name || chainId;
+    if (!confirm(`Delete chain "${name}" and all its wear history? This cannot be undone.`)) return;
+    try {
+      await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}`, { method: 'DELETE' });
+      await loadChains();
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  async function openAddChain() {
+    document.getElementById('chain-dialog-title').textContent = 'Add chain';
+    document.getElementById('chain-edit-id').value = '';
+    document.getElementById('chain-name').value = '';
+    document.getElementById('chain-bike-type').value = 'road';
+    document.getElementById('chain-base-hours').value = '16';
+    await populateGearDropdown('');
+    document.getElementById('chain-dialog-overlay').classList.add('open');
+    setTimeout(() => document.getElementById('chain-name').focus(), 50);
+  }
+
+  async function openEditChain(chainId) {
+    const chain = allChains.find(c => c.id === chainId);
+    if (!chain) return;
+    document.getElementById('chain-dialog-title').textContent = 'Edit chain';
+    document.getElementById('chain-edit-id').value = chain.id;
+    document.getElementById('chain-name').value = chain.name;
+    document.getElementById('chain-bike-type').value = chain.bike_type || 'road';
+    document.getElementById('chain-base-hours').value = chain.base_wax_hours || 12;
+    await populateGearDropdown(chain.gear_id || '');
+    document.getElementById('chain-dialog-overlay').classList.add('open');
+  }
+
+  async function populateGearDropdown(selectedGearId) {
+    const sel = document.getElementById('chain-gear');
+    sel.innerHTML = '<option value="">— None / manual only —</option>';
+    try {
+      if (!gearList.length) {
+        const res = await fetch(`${BASE}/intervals/gear`);
+        if (res.ok) gearList = (await res.json()).gear || [];
+      }
+      gearList.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id || '';
+        opt.textContent = g.name || g.id;
+        opt.selected = g.id === selectedGearId;
+        sel.appendChild(opt);
+      });
+      if (selectedGearId && !gearList.find(g => g.id === selectedGearId)) {
+        const opt = document.createElement('option');
+        opt.value = selectedGearId;
+        opt.textContent = selectedGearId;
+        opt.selected = true;
+        sel.appendChild(opt);
+      }
+    } catch {}
+  }
+
+  function chainBikeTypeChanged() {
+    const type = document.getElementById('chain-bike-type').value;
+    const hoursEl = document.getElementById('chain-base-hours');
+    if (!document.getElementById('chain-edit-id').value) {
+      hoursEl.value = type === 'gravel' ? '12' : '16';
+    }
+  }
+
+  function closeChainDialog() {
+    document.getElementById('chain-dialog-overlay').classList.remove('open');
+  }
+
+  async function saveChain() {
+    const name = document.getElementById('chain-name').value.trim();
+    if (!name) { alert('Chain name is required'); return; }
+    const editId = document.getElementById('chain-edit-id').value;
+    const id = editId || name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') + '_' + Date.now().toString(36);
+    const body = {
+      id,
+      name,
+      gear_id: document.getElementById('chain-gear').value || '',
+      bike_type: document.getElementById('chain-bike-type').value,
+      base_wax_hours: parseFloat(document.getElementById('chain-base-hours').value) || 12,
+    };
+    try {
+      const res = await fetch(`${BASE}/chains`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      closeChainDialog();
+      await loadChains();
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  async function openWearLog(chainId) {
+    currentWearChainId = chainId;
+    const chainName = allChains.find(c => c.id === chainId)?.name || chainId;
+    document.getElementById('wear-dialog-title').textContent = `Ride log — ${chainName}`;
+    document.getElementById('wear-add-date').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('wear-add-hours').value = '';
+    await populateConditionDropdown();
+    await renderWearTable(chainId);
+    document.getElementById('wear-dialog-overlay').classList.add('open');
+  }
+
+  async function populateConditionDropdown() {
+    const sel = document.getElementById('wear-add-condition');
+    if (sel.options.length > 1) return;
+    sel.innerHTML = '';
+    try {
+      const res = await fetch(`${BASE}/chains/conditions`);
+      if (res.ok) {
+        const data = await res.json();
+        (data.conditions || []).forEach(c => {
+          const opt = document.createElement('option');
+          opt.value = c; opt.textContent = c;
+          if (c === 'Standard Dry') opt.selected = true;
+          sel.appendChild(opt);
+        });
+      }
+    } catch {}
+  }
+
+  async function renderWearTable(chainId) {
+    const chain = allChains.find(c => c.id === chainId);
+    const tbody = document.getElementById('wear-table-body');
+    const entries = (chain?.wear_log || []).slice().sort((a, b) => b.date.localeCompare(a.date));
+    if (!entries.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="wear-empty">No rides logged yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = entries.map(e => `
+      <tr>
+        <td>${escapeHtml(e.date)}</td>
+        <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.activity_name || '—')}</td>
+        <td>${escapeHtml(e.condition)}</td>
+        <td>${(e.duration_hours || 0).toFixed(1)}</td>
+        <td style="color:var(--muted)">${e.multiplier}×</td>
+        <td style="color:var(--accent)">${(e.hours_consumed || 0).toFixed(2)}</td>
+        <td><button class="wear-delete" title="Remove entry" onclick="deleteWearEntry('${escapeJs(chainId)}','${escapeJs(e.activity_id)}')">×</button></td>
+      </tr>`).join('');
+  }
+
+  async function addManualWear() {
+    if (!currentWearChainId) return;
+    const date = document.getElementById('wear-add-date').value;
+    const hours = parseFloat(document.getElementById('wear-add-hours').value);
+    const condition = document.getElementById('wear-add-condition').value;
+    if (!date || !hours || !condition) { alert('Fill in date, hours and condition'); return; }
+    try {
+      const res = await fetch(`${BASE}/chains/${encodeURIComponent(currentWearChainId)}/wear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, duration_hours: hours, condition }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      await loadChains();
+      await renderWearTable(currentWearChainId);
+      document.getElementById('wear-add-hours').value = '';
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  async function deleteWearEntry(chainId, activityId) {
+    if (!confirm('Remove this entry?')) return;
+    try {
+      const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/wear/${encodeURIComponent(activityId)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      await loadChains();
+      await renderWearTable(chainId);
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  function closeWearDialog() {
+    document.getElementById('wear-dialog-overlay').classList.remove('open');
+    currentWearChainId = null;
+  }
+
+  // Close chain dialogs on backdrop click
+  document.getElementById('chain-dialog-overlay').addEventListener('click', e => {
+    if (e.target === document.getElementById('chain-dialog-overlay')) closeChainDialog();
+  });
+  document.getElementById('wear-dialog-overlay').addEventListener('click', e => {
+    if (e.target === document.getElementById('wear-dialog-overlay')) closeWearDialog();
+  });
+
   // ── Init ──
   (async function init() {
     ensureDefaults();
     await syncSessionsFromServer();
     renderTabs();
-    await switchMode(activeMode);
+    updatePanelVisibility();
+    if (activeMode === 'maintenance') {
+      loadChains();
+    } else {
+      await switchMode(activeMode);
+    }
     pollNotifications();
   })();
 </script>

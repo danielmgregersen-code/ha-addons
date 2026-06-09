@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from agent import TrainingAgent
+from chains import ChainManager, infer_condition, CONDITION_MULTIPLIERS
 
 OPTIONS_FILE = "/data/options.json"
 
@@ -29,6 +30,8 @@ WELLNESS_SESSION = "auto-wellness-check"
 WEEKLY_RECAP_STATE_FILE = f"{STORAGE_DIR}/weekly_recap_state.json"
 WELLNESS_STATE_FILE = f"{STORAGE_DIR}/wellness_state.json"
 AUTOMATION_POLL_SECONDS = 600  # 10-minute check interval for scheduled automations
+
+chain_manager = ChainManager()
 
 
 def load_options() -> dict:
@@ -356,7 +359,26 @@ async def auto_review_loop():
             # 14 days covers the typical case of someone adding RPE a week late.
             # The coach_tick check below prevents re-reviewing already-done rides.
             new_activities = agent.icu.get_activities(days_back=14, group_keywords=agent.group_ride_keywords)
+            gear_map = chain_manager.get_gear_id_map()
             for activity in new_activities:
+                # Log chain wear for any activity whose gear_id matches a configured chain
+                gear_id = activity.get("gear_id")
+                if gear_id and gear_id in gear_map:
+                    try:
+                        sport_type = activity.get("type") or ""
+                        condition, multiplier = infer_condition(sport_type, activity)
+                        chain_manager.log_activity_wear(
+                            activity_id=str(activity["id"]),
+                            activity_name=activity.get("name", "Unnamed activity"),
+                            date=activity.get("date", ""),
+                            chain_id=gear_map[gear_id],
+                            duration_seconds=activity.get("duration_seconds") or 0,
+                            condition=condition,
+                            multiplier=multiplier,
+                        )
+                    except Exception as e:
+                        print(f"Chain wear log error for {activity.get('id')}: {e}", flush=True)
+
                 if activity.get("coach_tick"):
                     continue
                 if not activity.get("rpe") or not activity.get("feel"):
@@ -611,6 +633,87 @@ def debug_storage():
         "config_dir_accessible": os.path.exists("/config"),
         "config_dir_writable": os.access("/config", os.W_OK),
     }
+
+
+@app.get("/intervals/gear")
+def get_gear():
+    """Return bikes/gear configured in the athlete's Intervals.icu profile."""
+    return {"gear": agent.icu.get_gear()}
+
+
+# ── Chain models ──
+class ChainBody(BaseModel):
+    id: str
+    name: str = None
+    gear_id: str = None
+    bike_type: str = None
+    base_wax_hours: float = None
+    active: bool = None
+
+class WaxBody(BaseModel):
+    date: str = None
+    note: str = ""
+
+class SealantBody(BaseModel):
+    date: str = None
+    note: str = ""
+
+class ManualWearBody(BaseModel):
+    date: str
+    duration_hours: float
+    condition: str
+
+# ── Chain routes ──
+@app.get("/chains")
+def get_chains():
+    return {"chains": chain_manager.get_all()}
+
+@app.post("/chains")
+def upsert_chain(body: ChainBody):
+    try:
+        chain = chain_manager.upsert_chain(body.model_dump(exclude_none=False))
+        return chain
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/chains/{chain_id}")
+def delete_chain(chain_id: str):
+    chain_manager.delete_chain(chain_id)
+    return {"deleted": chain_id}
+
+@app.post("/chains/{chain_id}/wax")
+def log_wax(chain_id: str, body: WaxBody):
+    try:
+        return chain_manager.log_wax_event(chain_id, body.date, body.note)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/chains/{chain_id}/sealant")
+def log_sealant(chain_id: str, body: SealantBody):
+    try:
+        return chain_manager.log_sealant_event(chain_id, body.date, body.note)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/chains/{chain_id}/wear")
+def log_manual_wear(chain_id: str, body: ManualWearBody):
+    try:
+        return chain_manager.log_manual_wear(
+            chain_id, body.date, body.duration_hours, body.condition
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.delete("/chains/{chain_id}/wear/{activity_id:path}")
+def delete_wear_entry(chain_id: str, activity_id: str):
+    try:
+        return chain_manager.delete_wear_entry(chain_id, activity_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.get("/chains/conditions")
+def get_conditions():
+    return {"conditions": list(CONDITION_MULTIPLIERS.keys()), "multipliers": CONDITION_MULTIPLIERS}
 
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
