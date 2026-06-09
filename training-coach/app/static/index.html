@@ -215,6 +215,18 @@
   .btn-add-chain:hover { border-color: var(--accent); color: var(--accent); }
   .empty-maint { text-align: center; padding: 60px 20px; color: var(--muted); font-size: 13px; line-height: 1.7; }
   .empty-maint-icon { font-size: 36px; margin-bottom: 12px; }
+  .chain-section { display: flex; flex-direction: column; gap: 10px; }
+  .chain-section-header { display: flex; align-items: center; gap: 10px; }
+  .chain-section-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 12px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
+  .chain-section-header::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  .chain-badge { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 8px; letter-spacing: 0.05em; text-transform: uppercase; }
+  .chain-badge.active { background: var(--accent2); color: #0d0f14; }
+  .chain-badge.inactive { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
+  .chain-badge.retired { background: #2a1a1a; color: #f06060; border: 1px solid #4a2020; }
+  .chain-card.retired-card { opacity: 0.55; }
+  .chain-card.retired-card:hover { border-color: #4a2020; opacity: 0.75; }
+  .btn-sm.danger { border-color: #4a2020; color: #c06060; }
+  .btn-sm.danger:hover { border-color: #f06060; color: #f06060; background: rgba(240,96,96,0.06); }
 
   /* Chain dialog */
   .chain-dialog { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; width: 340px; display: flex; flex-direction: column; gap: 14px; max-height: 90vh; overflow-y: auto; }
@@ -295,7 +307,7 @@
       <span class="maint-title">Chain Wax Tracker</span>
       <button class="btn-add-chain" onclick="openAddChain()">+ Add chain</button>
     </div>
-    <div class="chain-grid" id="chain-grid"></div>
+    <div id="chain-sections"></div>
   </div>
 </div>
 
@@ -322,11 +334,16 @@
       <input class="form-input" id="chain-name" placeholder="e.g. Grail 01.1" maxlength="40">
     </div>
     <div class="form-group">
-      <div class="form-label">Bike / gear</div>
+      <div class="form-label">Bike / gear (Strava)</div>
       <select class="form-select" id="chain-gear">
-        <option value="">— None / manual only —</option>
+        <option value="">— None —</option>
       </select>
-      <div class="form-hint">Rides on this bike will be tracked automatically</div>
+      <div class="form-hint">Requires Strava sync. Leave as None to match by power meter instead.</div>
+    </div>
+    <div class="form-group">
+      <div class="form-label">Power meter serial</div>
+      <input class="form-input" id="chain-pm-serial" placeholder="e.g. 7101398">
+      <div class="form-hint">Found in Intervals.icu under the activity's "PM Serial". Used to auto-match rides without Strava.</div>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -1010,61 +1027,109 @@
       allChains = data.chains || [];
       renderChainGrid();
     } catch {
-      document.getElementById('chain-grid').innerHTML =
+      document.getElementById('chain-sections').innerHTML =
         '<div class="empty-maint"><div class="empty-maint-icon">⚠</div>Could not load chains.</div>';
     }
   }
 
   function renderChainGrid() {
-    const grid = document.getElementById('chain-grid');
+    const el = document.getElementById('chain-sections');
     if (!allChains.length) {
-      grid.innerHTML = '<div class="empty-maint" style="grid-column:1/-1"><div class="empty-maint-icon">🔗</div>No chains yet.<br>Add a chain to start tracking wax wear.</div>';
+      el.innerHTML = '<div class="empty-maint"><div class="empty-maint-icon">🔗</div>No chains yet.<br>Add a chain to start tracking wax wear.</div>';
       return;
     }
-    grid.innerHTML = allChains.map(c => renderChainCard(c)).join('');
+    const sections = ['road', 'gravel'];
+    const labels = { road: 'Road', gravel: 'Gravel' };
+    el.innerHTML = sections.map(bt => {
+      const chains = allChains.filter(c => (c.bike_type || 'road') === bt);
+      if (!chains.length) return '';
+      // Sort: active non-retired → inactive non-retired → retired
+      const sorted = [
+        ...chains.filter(c => c.active && !c.retired),
+        ...chains.filter(c => !c.active && !c.retired),
+        ...chains.filter(c => c.retired),
+      ];
+      return `
+        <div class="chain-section">
+          <div class="chain-section-header">
+            <span class="chain-section-title">${labels[bt]}</span>
+          </div>
+          <div class="chain-grid">
+            ${sorted.map(c => renderChainCard(c)).join('')}
+          </div>
+        </div>`;
+    }).join('');
   }
 
   function renderChainCard(c) {
+    const retired = !!c.retired;
+    const active = !!c.active;
     const pct = c.pct_remaining ?? 100;
     const remaining = c.hours_remaining ?? c.base_wax_hours;
     const base = c.base_wax_hours || 12;
-    const barClass = pct > 50 ? 'good' : pct > 20 ? 'warn' : 'crit';
-    const cardClass = pct > 50 ? '' : pct > 20 ? ' warn' : ' crit';
+    const barClass = retired ? 'crit' : pct > 50 ? 'good' : pct > 20 ? 'warn' : 'crit';
+    const cardStateClass = retired ? ' retired-card' : pct > 50 ? '' : pct > 20 ? ' warn' : ' crit';
     const lastWax = c.last_wax_date || '—';
     const lastSealant = c.last_sealant_date || '—';
-    const gearLabel = c.gear_id ? c.gear_id : 'No gear linked';
-    const bikeLabel = c.bike_type === 'gravel' ? 'Gravel' : 'Road';
+    const gearLabel = c.gear_id
+      ? c.gear_id
+      : c.pm_serial
+        ? 'PM ' + c.pm_serial
+        : 'No bike linked';
     const sid = escapeJs(c.id);
+
+    const badge = retired
+      ? `<span class="chain-badge retired">Retired</span>`
+      : active
+        ? `<span class="chain-badge active">Active</span>`
+        : `<span class="chain-badge inactive">Inactive</span>`;
+
+    let btns = '';
+    if (retired) {
+      btns = `
+        <button class="btn-sm" onclick="restoreChain('${sid}')">Restore</button>
+        <button class="btn-sm" onclick="openWearLog('${sid}')">Ride log</button>
+        <button class="btn-icon danger" title="Delete" onclick="deleteChain('${sid}')" style="margin-left:auto">×</button>`;
+    } else if (active) {
+      btns = `
+        <button class="btn-sm primary" onclick="logWax('${sid}')">Log wax</button>
+        <button class="btn-sm accent2" onclick="logSealant('${sid}')">Log sealant</button>
+        <button class="btn-sm" onclick="openWearLog('${sid}')">Ride log</button>
+        <button class="btn-sm danger" onclick="retireChain('${sid}')">Retire</button>`;
+    } else {
+      btns = `
+        <button class="btn-sm primary" onclick="setChainActive('${sid}')">Set active</button>
+        <button class="btn-sm" onclick="logWax('${sid}')">Log wax</button>
+        <button class="btn-sm" onclick="openWearLog('${sid}')">Ride log</button>
+        <button class="btn-sm danger" onclick="retireChain('${sid}')">Retire</button>`;
+    }
+
     return `
-      <div class="chain-card${cardClass}" data-chain-id="${escapeHtml(c.id)}">
+      <div class="chain-card${cardStateClass}" data-chain-id="${escapeHtml(c.id)}">
         <div class="chain-card-top">
           <div>
             <div class="chain-card-name">${escapeHtml(c.name)}</div>
-            <div class="chain-card-meta">${bikeLabel} · ${escapeHtml(gearLabel)}</div>
+            <div class="chain-card-meta">${escapeHtml(gearLabel)}</div>
           </div>
           <div class="chain-card-actions-top">
+            ${badge}
             <button class="btn-icon" title="Edit" onclick="openEditChain('${sid}')">✎</button>
-            <button class="btn-icon danger" title="Delete" onclick="deleteChain('${sid}')">×</button>
           </div>
         </div>
         <div>
           <div class="chain-progress-wrap">
-            <div class="chain-progress-bar ${barClass}" style="width:${pct}%"></div>
+            <div class="chain-progress-bar ${barClass}" style="width:${retired ? 100 : pct}%"></div>
           </div>
           <div class="chain-progress-label">
-            <span class="hours">${remaining.toFixed(1)}h remaining</span>
-            <span class="pct">${pct.toFixed(0)}% of ${base}h</span>
+            <span class="hours">${retired ? 'Worn out' : remaining.toFixed(1) + 'h remaining'}</span>
+            <span class="pct">${retired ? '' : pct.toFixed(0) + '% of ' + base + 'h'}</span>
           </div>
         </div>
         <div class="chain-dates">
           <div class="chain-date-row"><span class="label">Last wax</span><span class="val">${escapeHtml(lastWax)}</span></div>
           <div class="chain-date-row"><span class="label">Last sealant</span><span class="val">${escapeHtml(lastSealant)}</span></div>
         </div>
-        <div class="chain-btns">
-          <button class="btn-sm primary" onclick="logWax('${sid}')">Log wax</button>
-          <button class="btn-sm accent2" onclick="logSealant('${sid}')">Log sealant</button>
-          <button class="btn-sm" onclick="openWearLog('${sid}')">Ride log</button>
-        </div>
+        <div class="chain-btns" style="flex-wrap:wrap;align-items:center">${btns}</div>
       </div>`;
   }
 
@@ -1105,10 +1170,41 @@
     } catch (e) { alert(`Error: ${e.message}`); }
   }
 
+  async function setChainActive(chainId) {
+    try {
+      const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/active`, { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      const data = await res.json();
+      allChains = data.chains || allChains;
+      renderChainGrid();
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  async function retireChain(chainId) {
+    const name = allChains.find(c => c.id === chainId)?.name || chainId;
+    if (!confirm(`Retire "${name}"? It will be moved to the bottom and no longer receive auto-logged wear.`)) return;
+    try {
+      const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/retire`, { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      await loadChains();
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  async function restoreChain(chainId) {
+    const name = allChains.find(c => c.id === chainId)?.name || chainId;
+    if (!confirm(`Restore "${name}"? It will move back to inactive — use "Set active" to start tracking rides on it.`)) return;
+    try {
+      const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/restore`, { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      await loadChains();
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
   async function openAddChain() {
     document.getElementById('chain-dialog-title').textContent = 'Add chain';
     document.getElementById('chain-edit-id').value = '';
     document.getElementById('chain-name').value = '';
+    document.getElementById('chain-pm-serial').value = '';
     document.getElementById('chain-bike-type').value = 'road';
     document.getElementById('chain-base-hours').value = '16';
     await populateGearDropdown('');
@@ -1122,6 +1218,7 @@
     document.getElementById('chain-dialog-title').textContent = 'Edit chain';
     document.getElementById('chain-edit-id').value = chain.id;
     document.getElementById('chain-name').value = chain.name;
+    document.getElementById('chain-pm-serial').value = chain.pm_serial || '';
     document.getElementById('chain-bike-type').value = chain.bike_type || 'road';
     document.getElementById('chain-base-hours').value = chain.base_wax_hours || 12;
     await populateGearDropdown(chain.gear_id || '');
@@ -1174,6 +1271,7 @@
       id,
       name,
       gear_id: document.getElementById('chain-gear').value || '',
+      pm_serial: document.getElementById('chain-pm-serial').value.trim() || '',
       bike_type: document.getElementById('chain-bike-type').value,
       base_wax_hours: parseFloat(document.getElementById('chain-base-hours').value) || 12,
     };

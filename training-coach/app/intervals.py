@@ -147,6 +147,8 @@ class IntervalsClient:
             "description": a.get("description"),     # coach comment lives here
             "group_ride": self._is_group_ride(a, group_keywords),
             "gear_id": a.get("gear_id"),
+            "power_meter": a.get("power_meter"),
+            "power_meter_serial": a.get("power_meter_serial"),
             "trainer": a.get("trainer"),
             "weather_humidity": a.get("humidity"),
             "weather_precipitation": a.get("precipitation"),
