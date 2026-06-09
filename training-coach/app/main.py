@@ -365,6 +365,13 @@ async def auto_review_loop():
                     gear_id=activity.get("gear_id"),
                     pm_serial=activity.get("power_meter_serial"),
                 )
+                # Only log rides on/after the chain was activated. Without this,
+                # marking a chain active would back-sync the prior 14 days of
+                # rides onto the new chain.
+                active_since = chain_ref.get("active_since") if chain_ref else None
+                activity_date = activity.get("date", "")
+                if chain_ref and active_since and activity_date and activity_date < active_since:
+                    chain_ref = None
                 if chain_ref:
                     try:
                         sport_type = activity.get("type") or ""
@@ -420,8 +427,50 @@ async def auto_review_loop():
                     sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
 
                 print(f"Auto-review done for {activity.get('id')}", flush=True)
+
+            # After processing rides (and after sealant calendar ticks), fire
+            # any newly-crossed wax/sealant life thresholds (25% and 0%).
+            await dispatch_chain_alerts()
         except Exception as e:
             print(f"Auto-review error: {e}", flush=True)
+
+
+async def dispatch_chain_alerts():
+    """Turn newly-crossed chain/sealant life thresholds into notifications
+    (in-app banner + HA push)."""
+    for alert in chain_manager.check_threshold_alerts():
+        kind, level, name = alert["kind"], alert["level"], alert["name"]
+        if kind == "wax":
+            if level == 25:
+                title = "Chain wax low"
+                body = f"{name}: ~25% wax life left — plan a re-wax."
+            else:
+                title = "Chain wax depleted"
+                body = f"{name}: wax life used up — re-wax now."
+            notif_type = "wax_alert"
+        else:
+            if level == 25:
+                title = "Sealant check due soon"
+                body = f"{name}: ~25% of the sealant interval left — check/top off soon."
+            else:
+                title = "Sealant overdue"
+                body = f"{name}: sealant interval elapsed — check/top off now."
+            notif_type = "sealant_alert"
+        now = datetime.now()
+        notif = {
+            "id": f"{kind}-{level}-{alert['id']}-{int(now.timestamp())}",
+            "timestamp": now.isoformat(),
+            "activity_name": name,
+            "activity_date": now.strftime("%Y-%m-%d"),
+            "comment": body,
+            "type": notif_type,
+            "seen": False,
+        }
+        with notifications_lock:
+            notifications[notif["id"]] = notif
+            save_notifications(notifications)
+        await send_ha_notification(title, body)
+        print(f"Chain alert: {notif['id']}", flush=True)
 
 
 @asynccontextmanager
@@ -648,29 +697,29 @@ def get_gear():
 # ── Chain models ──
 class ChainBody(BaseModel):
     id: str
-    name: str = None
-    gear_id: str = None
-    pm_serial: str = None
-    bike_type: str = None
-    base_wax_hours: float = None
-    active: bool = None
+    name: str | None = None
+    gear_id: str | None = None
+    pm_serial: str | None = None
+    bike_type: str | None = None
+    base_wax_hours: float | None = None
+    active: bool | None = None
 
 class WaxBody(BaseModel):
-    date: str = None
+    date: str | None = None
     note: str = ""
 
 class SealantBody(BaseModel):
-    date: str = None
+    date: str | None = None
     note: str = ""
 
 class SealantConfigBody(BaseModel):
     id: str
-    name: str = None
-    bike_type: str = None
-    interval_days: int = None
+    name: str | None = None
+    bike_type: str | None = None
+    interval_days: int | None = None
 
 class SealantCheckinBody(BaseModel):
-    date: str = None
+    date: str | None = None
     note: str = ""
 
 class ManualWearBody(BaseModel):
@@ -679,8 +728,8 @@ class ManualWearBody(BaseModel):
     condition: str
 
 class UpdateWearBody(BaseModel):
-    condition: str = None
-    target_chain_id: str = None
+    condition: str | None = None
+    target_chain_id: str | None = None
 
 # ── Chain routes ──
 @app.get("/chains")
@@ -780,6 +829,15 @@ def delete_sealant(sealant_id: str):
 def log_sealant_checkin(sealant_id: str, body: SealantCheckinBody):
     try:
         return chain_manager.log_sealant_checkin(sealant_id, body.date, body.note)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.patch("/sealants/{sealant_id}/last-checkin")
+def set_sealant_last_checkin(sealant_id: str, body: SealantCheckinBody):
+    if not body.date:
+        raise HTTPException(status_code=422, detail="date is required")
+    try:
+        return chain_manager.set_last_checkin(sealant_id, body.date)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

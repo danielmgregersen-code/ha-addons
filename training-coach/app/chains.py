@@ -127,12 +127,77 @@ class ChainManager:
         with self._lock:
             return [self._compute_status(c) for c in self._data.get("chains", [])]
 
+    @staticmethod
+    def _eval_thresholds(remaining_pct: float, sent: list[str], key25: str, key0: str) -> list[str]:
+        """Given a remaining-life percentage and the set of already-sent alert
+        keys for an item, return any newly-crossed thresholds (25% / 0%) and
+        update `sent` in place. Thresholds re-arm once life recovers above them
+        (e.g. after a re-wax or sealant check-in)."""
+        fired = []
+        # Re-arm on recovery so a fresh wax/check-in can alert again later.
+        if remaining_pct > 25:
+            sent.clear()
+        elif remaining_pct > 0 and key0 in sent:
+            sent.remove(key0)
+        if remaining_pct <= 0 and key0 not in sent:
+            sent.append(key0)
+            fired.append(key0)
+        elif remaining_pct <= 25 and key25 not in sent:
+            sent.append(key25)
+            fired.append(key25)
+        return fired
+
+    def check_threshold_alerts(self) -> list[dict]:
+        """Scan chains and sealants for newly-crossed 25% / 0% life thresholds.
+        Each crossing is reported once (tracked per item in `alerts_sent`) until
+        life recovers above the threshold. Returns a list of alert dicts."""
+        alerts = []
+        with self._lock:
+            for c in self._data.get("chains", []):
+                if c.get("retired"):
+                    continue
+                pct = self._compute_status(c)["pct_remaining"]
+                sent = c.setdefault("alerts_sent", [])
+                for key in self._eval_thresholds(pct, sent, "wax_25", "wax_0"):
+                    alerts.append({
+                        "kind": "wax",
+                        "level": 0 if key == "wax_0" else 25,
+                        "id": c["id"],
+                        "name": c.get("name", c["id"]),
+                        "bike_type": c.get("bike_type", "road"),
+                    })
+            for s in self._data.get("sealants", []):
+                status = self._compute_sealant_status(s)
+                if status["last_checkin"] is None:
+                    continue  # never checked in — nothing to count down from
+                remaining = 100 - status["pct_elapsed"]
+                sent = s.setdefault("alerts_sent", [])
+                for key in self._eval_thresholds(remaining, sent, "sealant_25", "sealant_0"):
+                    alerts.append({
+                        "kind": "sealant",
+                        "level": 0 if key == "sealant_0" else 25,
+                        "id": s["id"],
+                        "name": s.get("name", s["id"]),
+                        "bike_type": s.get("bike_type", "road"),
+                    })
+            if alerts:
+                self._save()
+        return alerts
+
     def match_activity(self, gear_id: str = None, pm_serial: str = None) -> dict | None:
         """Find the active, non-retired chain for an activity, matching by Strava
-        gear_id first, then by power meter serial. Returns {"id", "bike_type"} or None.
+        gear_id first, then by power meter serial. Returns
+        {"id", "bike_type", "active_since"} or None.
 
         Matching by power meter serial lets wear tracking work without Strava sync —
-        the serial identifies the physical bike the chain is on."""
+        the serial identifies the physical bike the chain is on. `active_since` lets
+        the caller avoid back-syncing rides from before the chain was activated."""
+        def _ref(c):
+            return {
+                "id": c["id"],
+                "bike_type": c.get("bike_type", "road"),
+                "active_since": c.get("active_since"),
+            }
         with self._lock:
             candidates = [
                 c for c in self._data.get("chains", [])
@@ -140,10 +205,10 @@ class ChainManager:
             ]
             for c in candidates:
                 if gear_id and c.get("gear_id") and c["gear_id"] == gear_id:
-                    return {"id": c["id"], "bike_type": c.get("bike_type", "road")}
+                    return _ref(c)
             for c in candidates:
                 if pm_serial and c.get("pm_serial") and str(c["pm_serial"]) == str(pm_serial):
-                    return {"id": c["id"], "bike_type": c.get("bike_type", "road")}
+                    return _ref(c)
         return None
 
     @staticmethod
@@ -158,13 +223,19 @@ class ChainManager:
     def upsert_chain(self, data: dict) -> dict:
         """Create or update a chain. data must include 'id'.
         If active=True, deactivates other chains on the same bike (shared gear_id or pm_serial)."""
+        today = datetime.now().strftime("%Y-%m-%d")
         with self._lock:
             chains = self._data.setdefault("chains", [])
             existing = next((c for c in chains if c["id"] == data["id"]), None)
             if existing:
+                was_active = existing.get("active", False)
                 for k, v in data.items():
                     if v is not None:
                         existing[k] = v
+                # Transitioning into active stamps the activation date so wear
+                # logging won't back-sync rides from before this point.
+                if existing.get("active") and not was_active:
+                    existing["active_since"] = today
             else:
                 chains.append({
                     "id": data["id"],
@@ -174,6 +245,7 @@ class ChainManager:
                     "bike_type": data.get("bike_type", "road"),
                     "base_wax_hours": data.get("base_wax_hours", 12),
                     "active": data.get("active", True),
+                    "active_since": today if data.get("active", True) else None,
                     "retired": False,
                     "wax_events": [],
                     "sealant_events": [],
@@ -197,8 +269,11 @@ class ChainManager:
                 raise ValueError(f"Chain {chain_id!r} not found")
             if chain.get("retired"):
                 raise ValueError(f"Chain {chain_id!r} is retired — restore it first")
+            today = datetime.now().strftime("%Y-%m-%d")
             for c in self._data.get("chains", []):
                 if c["id"] == chain_id:
+                    if not c.get("active"):
+                        c["active_since"] = today
                     c["active"] = True
                 elif self._same_bike(chain, c):
                     c["active"] = False
@@ -379,6 +454,24 @@ class ChainManager:
             if not sealant:
                 raise ValueError(f"Sealant {sealant_id!r} not found")
             sealant.setdefault("events", []).append({"date": date, "note": note})
+            self._save()
+            return self._compute_sealant_status(sealant)
+
+    def set_last_checkin(self, sealant_id: str, date: str) -> dict:
+        """Correct the date of the most recent sealant check-in (for when it
+        wasn't logged the same day). Appends a check-in if none exist yet."""
+        with self._lock:
+            sealant = next(
+                (s for s in self._data.get("sealants", []) if s["id"] == sealant_id), None
+            )
+            if not sealant:
+                raise ValueError(f"Sealant {sealant_id!r} not found")
+            events = sealant.setdefault("events", [])
+            if events:
+                latest = max(events, key=lambda e: e["date"])
+                latest["date"] = date
+            else:
+                events.append({"date": date, "note": ""})
             self._save()
             return self._compute_sealant_status(sealant)
 

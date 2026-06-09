@@ -403,6 +403,11 @@
         <input class="form-input" type="number" id="sealant-interval" value="90" min="7" max="365" step="1">
       </div>
     </div>
+    <div class="form-group" id="sealant-lastchanged-group" style="display:none">
+      <div class="form-label">Last changed / topped off</div>
+      <input class="form-input" type="date" id="sealant-lastchanged">
+      <div class="form-hint">Correct this if you didn't log the check-in on the day it happened.</div>
+    </div>
     <div class="dialog-btns" style="justify-content:space-between">
       <button class="btn-cancel danger" id="sealant-delete-btn" onclick="deleteSealant(document.getElementById('sealant-edit-id').value)" style="display:none">Delete</button>
       <div style="display:flex;gap:8px;margin-left:auto">
@@ -753,6 +758,16 @@
 
   function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   function escapeJs(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+  // Extract a readable message from an error response. FastAPI validation
+  // errors return `detail` as a list of objects, so stringify non-strings.
+  async function errDetail(res) {
+    try {
+      const d = (await res.json()).detail;
+      if (typeof d === 'string') return d;
+      if (Array.isArray(d)) return d.map(e => e.msg || JSON.stringify(e)).join('; ');
+      return d ? JSON.stringify(d) : 'Error';
+    } catch { return 'Error'; }
+  }
 
   function renderContent(role, text) {
     if (role === 'coach') return marked.parse(text, { breaks: true });
@@ -943,6 +958,8 @@
     auto_review_error: { tab: 'review', session: AUTO_REVIEW_SESSION,    header: '⚠ Auto-review failed', primaryLabel: null,         targetMode: 'review' },
     weekly_recap:      { tab: 'review', session: WEEKLY_RECAP_SESSION,   header: '📊 Weekly recap',   primaryLabel: 'View recap',  targetMode: 'review' },
     wellness_alert:    { tab: 'health', session: WELLNESS_SESSION,       header: '⚠ Wellness alert',  primaryLabel: 'View in Health', targetMode: 'health' },
+    wax_alert:         { tab: 'maintenance', session: null,             header: '🔗 Chain wax',      primaryLabel: 'Open maintenance', targetMode: 'maintenance' },
+    sealant_alert:     { tab: 'maintenance', session: null,             header: '🛢 Sealant',        primaryLabel: 'Open maintenance', targetMode: 'maintenance' },
   };
 
   function showNotification(notif) {
@@ -1212,24 +1229,30 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: today, note: '' }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
   }
 
   async function logSealantCheckin(sealantId) {
     const today = new Date().toISOString().slice(0, 10);
-    if (!confirm(`Log sealant check-in for today (${today})?`)) return;
+    const date = prompt('Sealant check-in date (YYYY-MM-DD):', today);
+    if (!date) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert('Please enter a date as YYYY-MM-DD.'); return; }
     try {
       const res = await fetch(`${BASE}/sealants/${encodeURIComponent(sealantId)}/checkin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: today, note: '' }),
+        body: JSON.stringify({ date, note: '' }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
   }
+
+  // Track the check-in date shown when the edit dialog opened, so we only
+  // push a correction when the user actually changes it.
+  let sealantEditOrigCheckin = null;
 
   function openAddSealant(bikeType) {
     document.getElementById('sealant-edit-id').value = '';
@@ -1238,6 +1261,8 @@
     document.getElementById('sealant-bike-type').value = bikeType || 'road';
     document.getElementById('sealant-interval').value = '90';
     document.getElementById('sealant-delete-btn').style.display = 'none';
+    document.getElementById('sealant-lastchanged-group').style.display = 'none';
+    sealantEditOrigCheckin = null;
     document.getElementById('sealant-dialog-overlay').style.display = 'flex';
   }
 
@@ -1250,6 +1275,9 @@
     document.getElementById('sealant-bike-type').value = s.bike_type || 'road';
     document.getElementById('sealant-interval').value = s.interval_days ?? 90;
     document.getElementById('sealant-delete-btn').style.display = '';
+    sealantEditOrigCheckin = s.last_checkin || '';
+    document.getElementById('sealant-lastchanged').value = sealantEditOrigCheckin;
+    document.getElementById('sealant-lastchanged-group').style.display = '';
     document.getElementById('sealant-dialog-overlay').style.display = 'flex';
   }
 
@@ -1270,7 +1298,17 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, name, bike_type: bikeType, interval_days: intervalDays }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
+      // If the user corrected the last-changed date, push it.
+      const lastChanged = document.getElementById('sealant-lastchanged').value;
+      if (editId && lastChanged && lastChanged !== sealantEditOrigCheckin) {
+        const res2 = await fetch(`${BASE}/sealants/${encodeURIComponent(id)}/last-checkin`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date: lastChanged }),
+        });
+        if (!res2.ok) throw new Error(await errDetail(res2));
+      }
       closeSealantDialog();
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
@@ -1298,7 +1336,7 @@
   async function setChainActive(chainId) {
     try {
       const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/active`, { method: 'POST' });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       const data = await res.json();
       allChains = data.chains || allChains;
       renderChainGrid();
@@ -1310,7 +1348,7 @@
     if (!confirm(`Retire "${name}"? It will be moved to the bottom and no longer receive auto-logged wear.`)) return;
     try {
       const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/retire`, { method: 'POST' });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
   }
@@ -1320,7 +1358,7 @@
     if (!confirm(`Restore "${name}"? It will move back to inactive — use "Set active" to start tracking rides on it.`)) return;
     try {
       const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/restore`, { method: 'POST' });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
   }
@@ -1406,7 +1444,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       closeChainDialog();
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
@@ -1537,7 +1575,7 @@
           }),
         }
       );
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
       await renderWearTable(chainId);
     } catch (e) { alert(`Error: ${e.message}`); }
@@ -1562,7 +1600,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date, duration_hours: hours, condition }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
       await renderWearTable(currentWearChainId);
       document.getElementById('wear-add-hours').value = '';
@@ -1573,7 +1611,7 @@
     if (!confirm('Remove this entry?')) return;
     try {
       const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/wear/${encodeURIComponent(activityId)}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+      if (!res.ok) throw new Error(await errDetail(res));
       await loadChains();
       await renderWearTable(chainId);
     } catch (e) { alert(`Error: ${e.message}`); }
