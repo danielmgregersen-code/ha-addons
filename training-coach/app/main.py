@@ -688,6 +688,27 @@ def delete_chain(chain_id: str):
     chain_manager.delete_chain(chain_id)
     return {"deleted": chain_id}
 
+@app.post("/chains/{chain_id}/active")
+def set_chain_active(chain_id: str):
+    try:
+        return {"chains": chain_manager.set_active(chain_id)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/chains/{chain_id}/retire")
+def retire_chain(chain_id: str):
+    try:
+        return chain_manager.retire_chain(chain_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/chains/{chain_id}/restore")
+def restore_chain(chain_id: str):
+    try:
+        return chain_manager.restore_chain(chain_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 @app.post("/chains/{chain_id}/wax")
 def log_wax(chain_id: str, body: WaxBody):
     try:

@@ -115,16 +115,17 @@ class ChainManager:
             return [self._compute_status(c) for c in self._data.get("chains", [])]
 
     def get_gear_id_map(self) -> dict[str, dict]:
-        """Return {gear_id: {"id", "bike_type"}} for active chains with a gear_id set."""
+        """Return {gear_id: {"id", "bike_type"}} for active, non-retired chains with a gear_id set."""
         with self._lock:
             return {
                 c["gear_id"]: {"id": c["id"], "bike_type": c.get("bike_type", "road")}
                 for c in self._data.get("chains", [])
-                if c.get("gear_id") and c.get("active", True)
+                if c.get("gear_id") and c.get("active", True) and not c.get("retired", False)
             }
 
     def upsert_chain(self, data: dict) -> dict:
-        """Create or update a chain. data must include 'id'."""
+        """Create or update a chain. data must include 'id'.
+        If active=True, deactivates other chains sharing the same gear_id."""
         with self._lock:
             chains = self._data.setdefault("chains", [])
             existing = next((c for c in chains if c["id"] == data["id"]), None)
@@ -140,13 +141,57 @@ class ChainManager:
                     "bike_type": data.get("bike_type", "road"),
                     "base_wax_hours": data.get("base_wax_hours", 12),
                     "active": data.get("active", True),
+                    "retired": False,
                     "wax_events": [],
                     "sealant_events": [],
                     "wear_log": [],
                 })
+            # If activating, deactivate other chains on the same gear
+            target = next(c for c in chains if c["id"] == data["id"])
+            if target.get("active") and target.get("gear_id"):
+                for c in chains:
+                    if c["id"] != data["id"] and c.get("gear_id") == target["gear_id"]:
+                        c["active"] = False
             self._save()
-            updated = next(c for c in self._data["chains"] if c["id"] == data["id"])
-            return self._compute_status(updated)
+            return self._compute_status(target)
+
+    def set_active(self, chain_id: str) -> list[dict]:
+        """Activate a chain and deactivate all other chains that share its gear_id."""
+        with self._lock:
+            chain = next((c for c in self._data.get("chains", []) if c["id"] == chain_id), None)
+            if not chain:
+                raise ValueError(f"Chain {chain_id!r} not found")
+            if chain.get("retired"):
+                raise ValueError(f"Chain {chain_id!r} is retired — restore it first")
+            gear_id = chain.get("gear_id")
+            for c in self._data.get("chains", []):
+                if c["id"] == chain_id:
+                    c["active"] = True
+                elif gear_id and c.get("gear_id") == gear_id:
+                    c["active"] = False
+            self._save()
+            return [self._compute_status(c) for c in self._data["chains"]]
+
+    def retire_chain(self, chain_id: str) -> dict:
+        """Mark a chain as retired (worn out). Deactivates it automatically."""
+        with self._lock:
+            chain = next((c for c in self._data.get("chains", []) if c["id"] == chain_id), None)
+            if not chain:
+                raise ValueError(f"Chain {chain_id!r} not found")
+            chain["retired"] = True
+            chain["active"] = False
+            self._save()
+            return self._compute_status(chain)
+
+    def restore_chain(self, chain_id: str) -> dict:
+        """Un-retire a chain. Does not auto-activate it."""
+        with self._lock:
+            chain = next((c for c in self._data.get("chains", []) if c["id"] == chain_id), None)
+            if not chain:
+                raise ValueError(f"Chain {chain_id!r} not found")
+            chain["retired"] = False
+            self._save()
+            return self._compute_status(chain)
 
     def delete_chain(self, chain_id: str):
         with self._lock:
