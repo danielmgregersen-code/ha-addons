@@ -256,3 +256,55 @@ class ChainManager:
             ]
             self._save()
             return self._compute_status(chain)
+
+    def update_wear_entry(
+        self,
+        chain_id: str,
+        activity_id: str,
+        new_condition: str = None,
+        new_chain_id: str = None,
+    ) -> dict:
+        """Update condition and/or move an entry to a different chain.
+        Recalculates hours_consumed from the target chain's bike_type multiplier table."""
+        with self._lock:
+            chain = next(
+                (c for c in self._data.get("chains", []) if c["id"] == chain_id), None
+            )
+            if not chain:
+                raise ValueError(f"Chain {chain_id!r} not found")
+            wear_log = chain.get("wear_log", [])
+            entry = next((e for e in wear_log if e["activity_id"] == activity_id), None)
+            if not entry:
+                raise ValueError(f"Wear entry {activity_id!r} not found on chain {chain_id!r}")
+
+            target_chain = chain
+            moving = new_chain_id and new_chain_id != chain_id
+            if moving:
+                target_chain = next(
+                    (c for c in self._data.get("chains", []) if c["id"] == new_chain_id), None
+                )
+                if not target_chain:
+                    raise ValueError(f"Target chain {new_chain_id!r} not found")
+
+            condition = new_condition or entry["condition"]
+            bike_type = target_chain.get("bike_type", "road")
+            multiplier = conditions_for(bike_type).get(condition, 1.0)
+            hours_consumed = round(entry["duration_hours"] * multiplier, 4)
+
+            updated = {**entry, "condition": condition, "multiplier": multiplier, "hours_consumed": hours_consumed}
+
+            if moving:
+                chain["wear_log"] = [e for e in wear_log if e["activity_id"] != activity_id]
+                # Remove any duplicate in target, then append
+                target_chain["wear_log"] = [
+                    e for e in target_chain.setdefault("wear_log", []) if e["activity_id"] != activity_id
+                ]
+                target_chain["wear_log"].append(updated)
+            else:
+                for i, e in enumerate(wear_log):
+                    if e["activity_id"] == activity_id:
+                        wear_log[i] = updated
+                        break
+
+            self._save()
+            return self._compute_status(target_chain)

@@ -666,6 +666,10 @@ class ManualWearBody(BaseModel):
     duration_hours: float
     condition: str
 
+class UpdateWearBody(BaseModel):
+    condition: str = None
+    target_chain_id: str = None
+
 # ── Chain routes ──
 @app.get("/chains")
 def get_chains():
@@ -703,6 +707,15 @@ def log_manual_wear(chain_id: str, body: ManualWearBody):
     try:
         return chain_manager.log_manual_wear(
             chain_id, body.date, body.duration_hours, body.condition
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.patch("/chains/{chain_id}/wear/{activity_id:path}")
+def update_wear_entry(chain_id: str, activity_id: str, body: UpdateWearBody):
+    try:
+        return chain_manager.update_wear_entry(
+            chain_id, activity_id, body.condition, body.target_chain_id
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
