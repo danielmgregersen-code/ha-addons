@@ -128,40 +128,35 @@ class ChainManager:
             return [self._compute_status(c) for c in self._data.get("chains", [])]
 
     @staticmethod
-    def _eval_thresholds(remaining_pct: float, sent: list[str], key25: str, key0: str) -> list[str]:
-        """Given a remaining-life percentage and the set of already-sent alert
-        keys for an item, return any newly-crossed thresholds (25% / 0%) and
-        update `sent` in place. Thresholds re-arm once life recovers above them
-        (e.g. after a re-wax or sealant check-in)."""
-        fired = []
-        # Re-arm on recovery so a fresh wax/check-in can alert again later.
+    def _crosses_25(remaining_pct: float, was_sent: bool) -> tuple[bool, bool]:
+        """Given a remaining-life percentage and whether the 25% alert was
+        already sent for this item, return (newly_crossed, new_sent_state).
+        Re-arms once life recovers above 25% (e.g. after a re-wax or sealant
+        check-in)."""
         if remaining_pct > 25:
-            sent.clear()
-        elif remaining_pct > 0 and key0 in sent:
-            sent.remove(key0)
-        if remaining_pct <= 0 and key0 not in sent:
-            sent.append(key0)
-            fired.append(key0)
-        elif remaining_pct <= 25 and key25 not in sent:
-            sent.append(key25)
-            fired.append(key25)
-        return fired
+            return False, False
+        if was_sent:
+            return False, True
+        return True, True
 
     def check_threshold_alerts(self) -> list[dict]:
-        """Scan chains and sealants for newly-crossed 25% / 0% life thresholds.
-        Each crossing is reported once (tracked per item in `alerts_sent`) until
-        life recovers above the threshold. Returns a list of alert dicts."""
+        """Scan chains and sealants for newly-crossed 25%-remaining-life
+        thresholds. Each crossing is reported once (tracked per item via
+        `alerts_sent`) until life recovers above 25%. The 0% case is handled
+        separately by `get_zero_life_items`, which is polled live so its
+        banner persists until the underlying issue is resolved."""
         alerts = []
         with self._lock:
             for c in self._data.get("chains", []):
                 if c.get("retired"):
                     continue
                 pct = self._compute_status(c)["pct_remaining"]
-                sent = c.setdefault("alerts_sent", [])
-                for key in self._eval_thresholds(pct, sent, "wax_25", "wax_0"):
+                fired, new_state = self._crosses_25(pct, c.get("alerts_sent", False))
+                c["alerts_sent"] = new_state
+                if fired:
                     alerts.append({
                         "kind": "wax",
-                        "level": 0 if key == "wax_0" else 25,
+                        "level": 25,
                         "id": c["id"],
                         "name": c.get("name", c["id"]),
                         "bike_type": c.get("bike_type", "road"),
@@ -171,18 +166,48 @@ class ChainManager:
                 if status["last_checkin"] is None:
                     continue  # never checked in — nothing to count down from
                 remaining = 100 - status["pct_elapsed"]
-                sent = s.setdefault("alerts_sent", [])
-                for key in self._eval_thresholds(remaining, sent, "sealant_25", "sealant_0"):
+                fired, new_state = self._crosses_25(remaining, s.get("alerts_sent", False))
+                s["alerts_sent"] = new_state
+                if fired:
                     alerts.append({
                         "kind": "sealant",
-                        "level": 0 if key == "sealant_0" else 25,
+                        "level": 25,
                         "id": s["id"],
                         "name": s.get("name", s["id"]),
                         "bike_type": s.get("bike_type", "road"),
                     })
-            if alerts:
-                self._save()
+            self._save()
         return alerts
+
+    def get_zero_life_items(self) -> list[dict]:
+        """Items currently at or below 0% life remaining (wax depleted or
+        sealant interval fully elapsed). Computed live from current state —
+        used to drive a persistent banner that stays until the chain is
+        re-waxed or the sealant is checked in."""
+        items = []
+        with self._lock:
+            for c in self._data.get("chains", []):
+                if c.get("retired"):
+                    continue
+                if self._compute_status(c)["pct_remaining"] <= 0:
+                    items.append({
+                        "kind": "wax",
+                        "id": c["id"],
+                        "name": c.get("name", c["id"]),
+                        "bike_type": c.get("bike_type", "road"),
+                    })
+            for s in self._data.get("sealants", []):
+                status = self._compute_sealant_status(s)
+                if status["last_checkin"] is None:
+                    continue
+                if status["pct_elapsed"] >= 100:
+                    items.append({
+                        "kind": "sealant",
+                        "id": s["id"],
+                        "name": s.get("name", s["id"]),
+                        "bike_type": s.get("bike_type", "road"),
+                    })
+        return items
 
     def match_activity(self, gear_id: str = None, pm_serial: str = None) -> dict | None:
         """Find the active, non-retired chain for an activity, matching by Strava

@@ -436,29 +436,23 @@ async def auto_review_loop():
 
 
 async def dispatch_chain_alerts():
-    """Turn newly-crossed chain/sealant life thresholds into notifications
-    (in-app banner + HA push)."""
+    """Turn newly-crossed 25%-remaining-life thresholds into one-shot
+    notifications (in-app banner + HA push). 0% alerts are not dispatched
+    here — they're served live via /chains/zero-alerts so the banner
+    persists until the chain is re-waxed or the sealant checked in."""
     for alert in chain_manager.check_threshold_alerts():
-        kind, level, name = alert["kind"], alert["level"], alert["name"]
+        kind, name = alert["kind"], alert["name"]
         if kind == "wax":
-            if level == 25:
-                title = "Chain wax low"
-                body = f"{name}: ~25% wax life left — plan a re-wax."
-            else:
-                title = "Chain wax depleted"
-                body = f"{name}: wax life used up — re-wax now."
+            title = "Chain wax low"
+            body = f"{name}: ~25% wax life left — plan a re-wax."
             notif_type = "wax_alert"
         else:
-            if level == 25:
-                title = "Sealant check due soon"
-                body = f"{name}: ~25% of the sealant interval left — check/top off soon."
-            else:
-                title = "Sealant overdue"
-                body = f"{name}: sealant interval elapsed — check/top off now."
+            title = "Sealant check due soon"
+            body = f"{name}: ~25% of the sealant interval left — check/top off soon."
             notif_type = "sealant_alert"
         now = datetime.now()
         notif = {
-            "id": f"{kind}-{level}-{alert['id']}-{int(now.timestamp())}",
+            "id": f"{kind}-25-{alert['id']}-{int(now.timestamp())}",
             "timestamp": now.isoformat(),
             "activity_name": name,
             "activity_date": now.strftime("%Y-%m-%d"),
@@ -735,6 +729,12 @@ class UpdateWearBody(BaseModel):
 @app.get("/chains")
 def get_chains():
     return {"chains": chain_manager.get_all(), "sealants": chain_manager.get_all_sealants()}
+
+@app.get("/chains/zero-alerts")
+def get_zero_alerts():
+    """Items currently at 0% life remaining — used for a persistent banner
+    that stays until the chain is re-waxed or the sealant checked in."""
+    return {"items": chain_manager.get_zero_life_items()}
 
 @app.post("/chains")
 def upsert_chain(body: ChainBody):
