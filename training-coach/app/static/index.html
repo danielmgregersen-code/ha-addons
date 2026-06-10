@@ -65,6 +65,8 @@
     animation: slideIn 0.25s ease;
   }
   @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .notif-card.zero-alert { border-color: #f06060; }
+  .notif-card.zero-alert .notif-header span { color: #f06060; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; }
   .notif-header { font-size: 10px; color: var(--accent); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
   .notif-title { font-size: 12px; color: var(--text); font-weight: 500; margin-bottom: 4px; }
   .notif-preview { font-size: 11px; color: var(--muted); line-height: 1.5; margin-bottom: 8px; }
@@ -950,6 +952,7 @@
   // ── Notifications ──
 
   const shownNotifIds = new Set();
+  const zeroAlertIds = new Set();
   const notifBanner = document.getElementById('notif-banner');
 
   // Maps notification type → { tab, session, header, primaryLabel, targetMode }
@@ -1048,7 +1051,57 @@
     } catch {}
   }
 
+  // ── Persistent 0%-life alerts (stay until the chain is re-waxed / sealant checked in) ──
+
+  function showZeroAlert(id, item) {
+    const isWax = item.kind === 'wax';
+    const header = isWax ? '🔗 Chain wax depleted' : '🛢 Sealant overdue';
+    const body = isWax
+      ? `${item.name}: wax life used up — re-wax now.`
+      : `${item.name}: sealant interval elapsed — check/top off now.`;
+    const card = document.createElement('div');
+    card.className = 'notif-card zero-alert';
+    card.dataset.id = id;
+    card.innerHTML = `
+      <div class="notif-header"><span>${header}</span></div>
+      <div class="notif-preview">${escapeHtml(body)}</div>
+      <div class="notif-btns">
+        <button class="notif-btn primary">Open maintenance</button>
+      </div>
+    `;
+    card.querySelector('.notif-btn.primary').addEventListener('click', () => {
+      if (activeMode !== 'maintenance') switchMode('maintenance');
+    });
+    notifBanner.appendChild(card);
+  }
+
+  async function pollZeroAlerts() {
+    try {
+      const res = await fetch(`${BASE}/chains/zero-alerts`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const items = data.items || [];
+      const currentIds = new Set(items.map(i => `zero-${i.kind}-${i.id}`));
+      // Remove banners for items that have been resolved (re-waxed / checked in)
+      zeroAlertIds.forEach(id => {
+        if (!currentIds.has(id)) {
+          const card = notifBanner.querySelector(`[data-id="${id}"]`);
+          if (card) card.remove();
+          zeroAlertIds.delete(id);
+        }
+      });
+      // Add banners for newly-depleted items
+      items.forEach(item => {
+        const id = `zero-${item.kind}-${item.id}`;
+        if (zeroAlertIds.has(id)) return;
+        zeroAlertIds.add(id);
+        showZeroAlert(id, item);
+      });
+    } catch {}
+  }
+
   setInterval(pollNotifications, 30000);
+  setInterval(pollZeroAlerts, 30000);
 
   // ── Token counter ──
   const tokenEl = document.getElementById('token-counter');
@@ -1642,6 +1695,7 @@
       await switchMode(activeMode);
     }
     pollNotifications();
+    pollZeroAlerts();
   })();
 </script>
 </body>
