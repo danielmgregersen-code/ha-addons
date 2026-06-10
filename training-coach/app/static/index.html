@@ -65,8 +65,6 @@
     animation: slideIn 0.25s ease;
   }
   @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-  .notif-card.zero-alert { border-color: #f06060; }
-  .notif-card.zero-alert .notif-header span { color: #f06060; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; }
   .notif-header { font-size: 10px; color: var(--accent); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
   .notif-title { font-size: 12px; color: var(--text); font-weight: 500; margin-bottom: 4px; }
   .notif-preview { font-size: 11px; color: var(--muted); line-height: 1.5; margin-bottom: 8px; }
@@ -514,7 +512,11 @@
 
   // ── Tab bar ──
 
-  const unreadByTab = { review: 0, health: 0 };
+  const unreadByTab = { review: 0, health: 0, maintenance: 0 };
+  // Count of chains/sealants currently at 0% life — kept separate from
+  // unreadByTab since it persists on the Maintenance badge even while
+  // that tab is active, until the issue is resolved.
+  let zeroLifeCount = 0;
 
   function renderTabs() {
     const modes = [
@@ -524,8 +526,13 @@
       { id: 'maintenance', label: 'Maintenance' },
     ];
     tabBarEl.innerHTML = modes.map(m => {
-      const count = unreadByTab[m.id] || 0;
-      const badge = (count > 0 && activeMode !== m.id)
+      let count = unreadByTab[m.id] || 0;
+      let persistent = false;
+      if (m.id === 'maintenance') {
+        count += zeroLifeCount;
+        persistent = zeroLifeCount > 0;
+      }
+      const badge = (count > 0 && (activeMode !== m.id || persistent))
         ? `<span class="tab-badge">${count}</span>` : '';
       return `<button class="tab${activeMode === m.id ? ' active' : ''}" onclick="switchMode('${m.id}')">${m.label}${badge}</button>`;
     }).join('');
@@ -952,7 +959,6 @@
   // ── Notifications ──
 
   const shownNotifIds = new Set();
-  const zeroAlertIds = new Set();
   const notifBanner = document.getElementById('notif-banner');
 
   // Maps notification type → { tab, session, header, primaryLabel, targetMode }
@@ -1051,57 +1057,23 @@
     } catch {}
   }
 
-  // ── Persistent 0%-life alerts (stay until the chain is re-waxed / sealant checked in) ──
+  // ── Persistent 0%-life count for the Maintenance tab badge ──
+  // Stays > 0 (even while the tab is active) for as long as any chain is
+  // wax-depleted or any sealant interval has fully elapsed; clears
+  // automatically once re-waxed / checked in.
 
-  function showZeroAlert(id, item) {
-    const isWax = item.kind === 'wax';
-    const header = isWax ? '🔗 Chain wax depleted' : '🛢 Sealant overdue';
-    const body = isWax
-      ? `${item.name}: wax life used up — re-wax now.`
-      : `${item.name}: sealant interval elapsed — check/top off now.`;
-    const card = document.createElement('div');
-    card.className = 'notif-card zero-alert';
-    card.dataset.id = id;
-    card.innerHTML = `
-      <div class="notif-header"><span>${header}</span></div>
-      <div class="notif-preview">${escapeHtml(body)}</div>
-      <div class="notif-btns">
-        <button class="notif-btn primary">Open maintenance</button>
-      </div>
-    `;
-    card.querySelector('.notif-btn.primary').addEventListener('click', () => {
-      if (activeMode !== 'maintenance') switchMode('maintenance');
-    });
-    notifBanner.appendChild(card);
-  }
-
-  async function pollZeroAlerts() {
+  async function pollZeroLifeCount() {
     try {
       const res = await fetch(`${BASE}/chains/zero-alerts`);
       if (!res.ok) return;
       const data = await res.json();
-      const items = data.items || [];
-      const currentIds = new Set(items.map(i => `zero-${i.kind}-${i.id}`));
-      // Remove banners for items that have been resolved (re-waxed / checked in)
-      zeroAlertIds.forEach(id => {
-        if (!currentIds.has(id)) {
-          const card = notifBanner.querySelector(`[data-id="${id}"]`);
-          if (card) card.remove();
-          zeroAlertIds.delete(id);
-        }
-      });
-      // Add banners for newly-depleted items
-      items.forEach(item => {
-        const id = `zero-${item.kind}-${item.id}`;
-        if (zeroAlertIds.has(id)) return;
-        zeroAlertIds.add(id);
-        showZeroAlert(id, item);
-      });
+      zeroLifeCount = (data.items || []).length;
+      renderTabs();
     } catch {}
   }
 
   setInterval(pollNotifications, 30000);
-  setInterval(pollZeroAlerts, 30000);
+  setInterval(pollZeroLifeCount, 30000);
 
   // ── Token counter ──
   const tokenEl = document.getElementById('token-counter');
@@ -1695,7 +1667,7 @@
       await switchMode(activeMode);
     }
     pollNotifications();
-    pollZeroAlerts();
+    pollZeroLifeCount();
   })();
 </script>
 </body>
