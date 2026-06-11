@@ -260,8 +260,9 @@
   /* Wear log dialog */
   .wear-dialog { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; width: min(600px, 95vw); display: flex; flex-direction: column; gap: 14px; max-height: 85vh; }
   .wear-dialog h3 { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px; color: var(--text); }
-  .wear-table-wrap { overflow-y: auto; flex: 1; }
-  .wear-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .wear-table-wrap { overflow-y: auto; overflow-x: hidden; flex: 1; }
+  .wear-table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }
+  .wear-table td, .wear-table th { overflow: hidden; text-overflow: ellipsis; }
   .wear-table th { text-align: left; padding: 6px 10px; color: var(--muted); font-weight: 400; border-bottom: 1px solid var(--border); letter-spacing: 0.06em; text-transform: uppercase; font-size: 10px; }
   .wear-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: middle; }
   .wear-table tr:last-child td { border-bottom: none; }
@@ -426,14 +427,14 @@
       <table class="wear-table">
         <thead>
           <tr>
-            <th>Date</th>
+            <th style="width:74px">Date</th>
             <th>Activity</th>
             <th>Condition</th>
-            <th>Hrs</th>
-            <th>×</th>
-            <th>Consumed</th>
-            <th></th>
-            <th></th>
+            <th style="width:34px">Hrs</th>
+            <th style="width:30px">×</th>
+            <th style="width:56px">Consumed</th>
+            <th style="width:26px"></th>
+            <th style="width:26px"></th>
           </tr>
         </thead>
         <tbody id="wear-table-body"></tbody>
@@ -1562,14 +1563,13 @@
 
     row.innerHTML = `
       <td>${escapeHtml(entry.date)}</td>
-      <td style="font-size:10px;color:var(--muted)">${escapeHtml(entry.activity_name || '—')}</td>
+      <td title="${escapeHtml(entry.activity_name || '')}" style="font-size:10px;color:var(--muted);white-space:nowrap">${escapeHtml(entry.activity_name || '—')}</td>
       <td>
-        <select id="edit-cond-sel" class="form-select" style="font-size:11px;padding:3px 6px;min-width:120px">${condOpts}</select>
+        <select id="edit-cond-sel" class="form-select" style="font-size:11px;padding:3px 4px;width:100%;min-width:0">${condOpts}</select>
       </td>
-      <td colspan="2">
-        <select id="edit-chain-sel" class="form-select" style="font-size:11px;padding:3px 6px;min-width:100px" onchange="onEditChainChange(this.value,'${escapeJs(entry.condition)}')">${chainOpts}</select>
+      <td colspan="3">
+        <select id="edit-chain-sel" class="form-select" style="font-size:11px;padding:3px 4px;width:100%;min-width:0" onchange="onEditChainChange(this.value,'${escapeJs(entry.condition)}')">${chainOpts}</select>
       </td>
-      <td style="color:var(--muted);font-size:10px">${(entry.duration_hours || 0).toFixed(1)}h</td>
       <td><button class="wear-delete" title="Save" onclick="saveWearEdit()" style="color:var(--accent2)">✓</button></td>
       <td><button class="wear-delete" title="Cancel" onclick="cancelWearEdit()">✗</button></td>`;
   }
