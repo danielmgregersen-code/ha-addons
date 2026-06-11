@@ -57,6 +57,7 @@ def load_options() -> dict:
         "chat_model": os.getenv("CHAT_MODEL", "gpt-5.5"),
         "auto_review_model": os.getenv("AUTO_REVIEW_MODEL", "gpt-5.5"),
         "ha_notification_target": os.getenv("HA_NOTIFICATION_TARGET", ""),
+        "training_readiness_entity": os.getenv("TRAINING_READINESS_ENTITY", "sensor.garmin_connect_morning_training_readiness"),
         "daily_token_budget": int(os.getenv("DAILY_TOKEN_BUDGET", "250000")),
     }
 
@@ -246,6 +247,7 @@ agent = TrainingAgent(
     days_back=options.get("days_back", 28),
     chat_model=options.get("chat_model", "gpt-5.5"),
     auto_review_model=options.get("auto_review_model", "gpt-5.5"),
+    readiness_entity=options.get("training_readiness_entity", ""),
 )
 
 

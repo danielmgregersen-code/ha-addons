@@ -33,7 +33,9 @@ Every Monday morning the coach automatically generates a structured training rec
 The recap is stored in the **📊 Weekly recaps** session (Review tab) and a notification card appears. If you have configured a push target it also sends a summary to your phone.
 
 ### Daily wellness check (every morning)
-Every morning the coach checks your latest wellness metrics against your configured baselines. HRV is judged primarily on a **7-day running average** (which filters out day-to-day noise) while still noting today's single-day reading and flagging it when it is far from your normal range. If the running-average HRV is suppressed, resting HR is elevated, or your form score (TSB) is below −20, it flags an alert — tells you which metric is concerning, looks at what is planned for the day, and suggests a specific adjustment (e.g. replace intervals with 60 minutes of easy Z2, or shorten the session by 30%).
+Every morning the coach checks your latest wellness metrics against your configured baselines. When a Garmin **training readiness** entity is configured (`training_readiness_entity`), that 0–100 score is the **primary signal** — it already folds together sleep, recovery, HRV status and load. It is classified into Garmin's bands (poor 1–24, low 25–49, moderate 50–74, high 75–94, prime 95–100), and the alert is conditioned on what's planned: a **poor** score always alerts, a **low** score alerts only when a hard/interval session is planned (low on an easy or rest day is fine), and **moderate or better** does not alert on its own.
+
+The Intervals.icu metrics are the supporting detail that explain the score. HRV is judged primarily on a **7-day running average** (which filters out day-to-day noise) while still noting today's single-day reading and flagging it when it is far from your normal range. A suppressed running-average HRV, resting HR above your range, form score (TSB) below −20, or a sleep score below 60 each independently raises an alert too. On any alert the coach tells you which signal is concerning, looks at what is planned for the day, and suggests a specific adjustment (e.g. replace intervals with 60 minutes of easy Z2, or shorten the session by 30%). If no readiness entity is set or it can't be read, the check falls back to the HRV/RHR/sleep/form logic.
 
 On normal days the check runs silently and records an `[OK]` entry. Push notifications and banner cards are shown only when an alert fires.
 
@@ -155,6 +157,7 @@ Paste your athlete ID into `intervals_athlete_id` and your API key into `interva
 | `chat_model` | OpenAI model used for interactive chat (default: `gpt-5.5`) |
 | `auto_review_model` | OpenAI model used for all automated tasks — auto-review, weekly recap, wellness check (default: `gpt-5.5`) |
 | `ha_notification_target` | HA notify service name for push notifications, e.g. `mobile_app_iphone`. Leave empty to disable push |
+| `training_readiness_entity` | Home Assistant entity holding your Garmin morning training readiness score (0–100). Default: `sensor.garmin_connect_morning_training_readiness`. Leave empty to disable. When set, the wellness check uses it as the primary signal (bands: poor 1–24, low 25–49, moderate 50–74, high 75–94, prime 95–100) |
 
 ---
 
