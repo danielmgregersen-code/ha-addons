@@ -33,7 +33,7 @@ Every Monday morning the coach automatically generates a structured training rec
 The recap is stored in the **📊 Weekly recaps** session (Review tab) and a notification card appears. If you have configured a push target it also sends a summary to your phone.
 
 ### Daily wellness check (every morning)
-Every morning the coach checks your latest wellness metrics against your configured baselines. If HRV is suppressed, resting HR is elevated, or your form score (TSB) is below −20, it flags an alert — tells you which metric is concerning, looks at what is planned for the day, and suggests a specific adjustment (e.g. replace intervals with 60 minutes of easy Z2, or shorten the session by 30%).
+Every morning the coach checks your latest wellness metrics against your configured baselines. HRV is judged primarily on a **7-day running average** (which filters out day-to-day noise) while still noting today's single-day reading and flagging it when it is far from your normal range. If the running-average HRV is suppressed, resting HR is elevated, or your form score (TSB) is below −20, it flags an alert — tells you which metric is concerning, looks at what is planned for the day, and suggests a specific adjustment (e.g. replace intervals with 60 minutes of easy Z2, or shorten the session by 30%).
 
 On normal days the check runs silently and records an `[OK]` entry. Push notifications and banner cards are shown only when an alert fires.
 
