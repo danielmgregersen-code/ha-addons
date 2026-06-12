@@ -388,6 +388,7 @@ async def auto_review_loop():
                             duration_seconds=activity.get("duration_seconds") or 0,
                             condition=condition,
                             multiplier=multiplier,
+                            started_at=activity.get("start_date_local"),
                         )
                     except Exception as e:
                         print(f"Chain wear log error for {activity.get('id')}: {e}", flush=True)
@@ -704,6 +705,9 @@ class WaxBody(BaseModel):
     date: str | None = None
     note: str = ""
 
+class WaxTimestampBody(BaseModel):
+    ts: str | None = None
+
 class SealantBody(BaseModel):
     date: str | None = None
     note: str = ""
@@ -776,6 +780,15 @@ def restore_chain(chain_id: str):
 def log_wax(chain_id: str, body: WaxBody):
     try:
         return chain_manager.log_wax_event(chain_id, body.date, body.note)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.patch("/chains/{chain_id}/wax/last")
+def set_last_wax(chain_id: str, body: WaxTimestampBody):
+    if not body.ts:
+        raise HTTPException(status_code=422, detail="ts is required")
+    try:
+        return chain_manager.set_last_wax(chain_id, body.ts)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

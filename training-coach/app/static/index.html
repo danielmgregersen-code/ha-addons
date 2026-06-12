@@ -419,6 +419,22 @@
   </div>
 </div>
 
+<div class="dialog-overlay" id="wax-dialog-overlay" style="display:none">
+  <div class="chain-dialog">
+    <h3>Edit last wax time</h3>
+    <input type="hidden" id="wax-edit-chain-id">
+    <div class="form-group">
+      <div class="form-label">Waxed on</div>
+      <input class="form-input" type="datetime-local" id="wax-edit-ts">
+      <div class="form-hint">Correct this if the wax wasn't logged at the actual time it happened.</div>
+    </div>
+    <div class="dialog-btns">
+      <button class="btn-cancel" onclick="closeWaxDialog()">Cancel</button>
+      <button class="btn-create" onclick="saveWaxEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- Wear log dialog -->
 <div class="dialog-overlay" id="wear-dialog-overlay">
   <div class="wear-dialog">
@@ -1218,7 +1234,7 @@
           </div>
         </div>
         <div class="chain-dates">
-          <div class="chain-date-row"><span class="label">Last wax</span><span class="val">${escapeHtml(lastWax)}</span></div>
+          <div class="chain-date-row"><span class="label">Last wax</span><span class="val">${escapeHtml(lastWax)}${c.last_wax_ts ? ` <button class="btn-icon" title="Edit wax time" onclick="openEditWax('${sid}', '${escapeJs(c.last_wax_ts)}')">✎</button>` : ''}</span></div>
         </div>
         <div class="chain-btns" style="flex-wrap:wrap;align-items:center">${btns}</div>
       </div>`;
@@ -1256,6 +1272,33 @@
         body: JSON.stringify({ date: today, note: '' }),
       });
       if (!res.ok) throw new Error(await errDetail(res));
+      await loadChains();
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  function openEditWax(chainId, ts) {
+    document.getElementById('wax-edit-chain-id').value = chainId;
+    document.getElementById('wax-edit-ts').value = (ts || '').slice(0, 16);
+    document.getElementById('wax-dialog-overlay').style.display = 'flex';
+  }
+
+  function closeWaxDialog() {
+    document.getElementById('wax-dialog-overlay').style.display = 'none';
+  }
+
+  async function saveWaxEdit() {
+    const chainId = document.getElementById('wax-edit-chain-id').value;
+    let ts = document.getElementById('wax-edit-ts').value;
+    if (!ts) { alert('Please choose a date and time.'); return; }
+    if (ts.length === 16) ts += ':00';
+    try {
+      const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/wax/last`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ts }),
+      });
+      if (!res.ok) throw new Error(await errDetail(res));
+      closeWaxDialog();
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
   }
