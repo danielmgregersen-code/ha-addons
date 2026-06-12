@@ -917,7 +917,7 @@
     if (!text) return;
     busy = true; sendBtn.disabled = true;
     inputEl.value = ''; inputEl.style.height = 'auto';
-    addMessage('user', text);
+    const userMsgEl = addMessage('user', text);
     showThinking();
 
     let historyBaseline = null;
@@ -951,11 +951,18 @@
           data = await postChat(true);
           hideThinking(); addMessage('coach', data.reply); refreshTokens();
         } else {
-          addMessage('coach', 'Stopped — your daily token budget was not exceeded further.');
+          // Cancelled — don't send, and don't acknowledge. Roll the prompt back
+          // into the input so the next send re-asks for confirmation.
+          userMsgEl?.remove();
+          inputEl.value = text; inputEl.style.height = 'auto';
         }
         return;
       }
       hideThinking(); addMessage('coach', data.reply); refreshTokens();
+      if (data.over_budget) {
+        addMessage('coach', '⚠ Heads up — that put you over your daily token budget. '
+          + 'Further requests today are pay-as-you-go; the next one will ask you to confirm.');
+      }
     } catch(e) {
       // TypeError typically means the connection was killed (e.g. ingress
       // proxy timeout). The backend may have completed and persisted the
