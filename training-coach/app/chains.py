@@ -82,17 +82,34 @@ class ChainManager:
         except IOError as e:
             print(f"Warning: could not save chains: {e}", flush=True)
 
+    @staticmethod
+    def _wear_ts(entry: dict) -> str:
+        """Sortable timestamp for a wear entry. Prefers the ride's precise
+        start time; legacy date-only entries fall back to the start of that day."""
+        return entry.get("ts") or (entry.get("date", "") + "T00:00:00")
+
+    @staticmethod
+    def _wax_ts(event: dict) -> str:
+        """Sortable timestamp for a wax event. Prefers the precise time the wax
+        was logged; legacy date-only events fall back to the end of that day,
+        since waxing is normally done after the day's riding."""
+        return event.get("ts") or (event.get("date", "") + "T23:59:59")
+
     def _compute_status(self, chain: dict) -> dict:
         base = chain.get("base_wax_hours", 12)
         wax_events = chain.get("wax_events", [])
         wear_log = chain.get("wear_log", [])
 
         last_wax_date = max((e["date"] for e in wax_events), default=None)
+        # Compare by timestamp, not date, so a ride and a same-day re-wax are
+        # ordered correctly — a ride before the wax must not count against the
+        # freshly-waxed chain.
+        last_wax_ts = max((self._wax_ts(e) for e in wax_events), default=None)
 
         hours_consumed = sum(
             e.get("hours_consumed", 0)
             for e in wear_log
-            if last_wax_date is None or e["date"] >= last_wax_date
+            if last_wax_ts is None or self._wear_ts(e) > last_wax_ts
         )
 
         hours_remaining = max(0.0, base - hours_consumed)
@@ -334,14 +351,19 @@ class ChainManager:
             self._save()
 
     def log_wax_event(self, chain_id: str, date: str = None, note: str = "") -> dict:
-        date = date or datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        date = date or today
+        # Logging for today uses the precise current time; a back-dated wax
+        # assumes the end of that day (waxing follows the day's riding).
+        ts = now.isoformat(timespec="seconds") if date == today else date + "T23:59:59"
         with self._lock:
             chain = next(
                 (c for c in self._data.get("chains", []) if c["id"] == chain_id), None
             )
             if not chain:
                 raise ValueError(f"Chain {chain_id!r} not found")
-            chain.setdefault("wax_events", []).append({"date": date, "note": note})
+            chain.setdefault("wax_events", []).append({"date": date, "note": note, "ts": ts})
             self._save()
             return self._compute_status(chain)
 
@@ -366,9 +388,13 @@ class ChainManager:
         duration_seconds: int,
         condition: str,
         multiplier: float,
+        started_at: str = None,
     ) -> dict:
         duration_hours = round((duration_seconds or 0) / 3600, 4)
         hours_consumed = round(duration_hours * multiplier, 4)
+        # Keep the ride's precise local start time so same-day re-wax ordering
+        # is correct. Fall back to noon when only a date is known.
+        ts = (started_at or (date + "T12:00:00")) if date else started_at
         with self._lock:
             chain = next(
                 (c for c in self._data.get("chains", []) if c["id"] == chain_id), None
@@ -382,6 +408,7 @@ class ChainManager:
                 "activity_id": activity_id,
                 "activity_name": activity_name,
                 "date": date,
+                "ts": ts,
                 "duration_hours": duration_hours,
                 "condition": condition,
                 "multiplier": multiplier,

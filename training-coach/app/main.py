@@ -386,6 +386,7 @@ async def auto_review_loop():
                             duration_seconds=activity.get("duration_seconds") or 0,
                             condition=condition,
                             multiplier=multiplier,
+                            started_at=activity.get("start_date_local"),
                         )
                     except Exception as e:
                         print(f"Chain wear log error for {activity.get('id')}: {e}", flush=True)

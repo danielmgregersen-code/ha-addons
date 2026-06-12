@@ -123,6 +123,7 @@ class IntervalsClient:
             "name": a.get("name"),
             "type": a.get("type"),
             "date": a.get("start_date_local", "")[:10],
+            "start_date_local": a.get("start_date_local"),
             "duration_seconds": a.get("moving_time"),
             "distance_meters": a.get("distance"),
             "avg_hr": a.get("average_heartrate"),
