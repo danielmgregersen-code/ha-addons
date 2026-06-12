@@ -1,6 +1,21 @@
 import json
 from openai import OpenAI
 from intervals import IntervalsClient
+from homeassistant import HAClient
+
+
+def _readiness_band(score: float) -> str:
+    """Garmin training-readiness bands (0-100, higher is better)."""
+    if score <= 24:
+        return "poor"
+    if score <= 49:
+        return "low"
+    if score <= 74:
+        return "moderate"
+    if score <= 94:
+        return "high"
+    return "prime"
+
 
 TOOLS = [
     {
@@ -58,6 +73,14 @@ TOOLS = [
                     "days_back": {"type": "integer", "default": 14}
                 },
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_training_readiness",
+            "description": "Fetch the athlete's Garmin morning training readiness (0–100, higher is better) from Home Assistant, with its band label (poor/low/moderate/high/prime). Returns available=false if the entity is not configured or unavailable.",
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -250,7 +273,7 @@ _REVIEW_TOOL_NAMES = {
     "get_coach_ticks", "post_activity_comment",
 }
 _HEALTH_TOOL_NAMES = {
-    "get_wellness", "get_coach_ticks",
+    "get_wellness", "get_training_readiness", "get_coach_ticks",
 }
 _PLANNING_TOOL_NAMES = {
     "get_planned_workouts", "get_upcoming_races", "get_weekly_note", "write_weekly_note",
@@ -334,6 +357,7 @@ Athlete baselines:
 {rhr_context}
 
 Interpretation guidelines:
+- Training readiness (Garmin, via get_training_readiness): a single 0–100 score, higher is better, that folds together sleep, recovery, HRV status and load. Bands: poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). When available, lead with it as the primary readiness signal and use the metrics below to explain it. If get_training_readiness returns available=false, rely on the HRV/RHR/sleep/form signals instead
 - HRV: compare each day's reading to the athlete's normal range. Consistently below baseline = accumulated fatigue or illness. Trending up = adapting well. Single low readings after hard efforts are normal
 - Resting HR: elevated (above normal range) on waking suggests incomplete recovery or illness. Trending down over weeks means improving aerobic fitness
 - Fatigue/form/fitness (CTL/ATL/TSB): CTL = fitness (chronic load), ATL = fatigue (acute load), TSB (form) = CTL − ATL. Very negative form (< −20) = high injury/illness risk
@@ -486,24 +510,40 @@ You have direct access to the athlete's training data via Intervals.icu.
 Today's date: {today}
 
 Athlete baselines: {hrv_context} {rhr_context}
-Alert thresholds: HRV below {hrv_min} ms is suppressed. RHR above {rhr_max} bpm is elevated. TSB (form) below −20 is high-fatigue risk. Sleep score below 60 (out of 100) is poor.
+
+PRIMARY SIGNAL — Garmin training readiness:
+- Training readiness is a single 0–100 score (higher is better) that already folds together sleep, recovery time, HRV status, acute load and stress. Treat it as the PRIMARY signal for this check and lead your assessment with it.
+- It falls into one of five bands: poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). The get_training_readiness tool returns both the score and the band.
+- The HRV, RHR, sleep and form metrics from Intervals.icu are SUPPORTING detail: use them to explain WHY readiness is where it is, and as secondary alert triggers in their own right.
+
+Alert logic — the readiness band drives the alert, conditioned on today's planned workout:
+- poor (≤24): ALWAYS an alert, no matter what is planned (or if nothing is planned). The body needs rest.
+- low (25–49): an alert ONLY if a hard / interval / structured intensity workout is planned today. Low readiness on an easy/Z2/recovery/rest day — or a day with no workout — is NOT an alert; note it and advise keeping any session genuinely easy.
+- moderate / high / prime (≥50): readiness itself is not an alert.
+- Secondary triggers (independent of readiness band): 7-day running average HRV below {hrv_min} ms (see HRV note), RHR above {rhr_max} bpm, TSB (form) below −20, or sleep score below 60 (out of 100). Any of these also warrants an alert.
+- If training readiness is unavailable (get_training_readiness returns available=false), fall back to the HRV/RHR/sleep/form logic below and say briefly that readiness could not be read.
+
+HRV interpretation (supporting signal):
+- Compute a 7-day running average HRV from the daily readings (mean of the available HRV values over the last 7 days). This running average is your primary HRV signal — it filters out day-to-day noise. A suppressed running average (below {hrv_min} ms) or a clear downward trend indicates accumulated fatigue or illness.
+- Also note today's single-day HRV, but treat it as secondary: a single low reading after a hard effort is normal and does not by itself warrant an alert when the running average is healthy. HOWEVER, explicitly call out the single-day reading whenever it is far from the normal range (roughly more than ~15% outside {hrv_min}–{hrv_max}, in either direction).
 
 Your task:
-1. Call get_wellness(days_back=3) to get the most recent HRV, RHR, fatigue, form, and sleep readings (sleepScore 0–100, sleepSecs)
-2. Call get_planned_workouts(days_ahead=1) to see if there is a structured workout planned today
-3. Assess whether any metric crosses the alert threshold above
-4. Write a brief morning check-in
+1. Call get_training_readiness to get today's Garmin readiness score and band
+2. Call get_planned_workouts(days_ahead=1) to see whether a structured/interval workout is planned today and how hard it is
+3. Call get_wellness(days_back=7) to get a full week of HRV, RHR, fatigue, form, and sleep readings (sleepScore 0–100, sleepSecs)
+4. Apply the alert logic above (readiness band + planned workout, plus the secondary triggers)
+5. Write a brief morning check-in
 
 IMPORTANT — begin your response with exactly one of these tokens on its own line:
-- `[ALERT]` if ANY metric is at or beyond an alert threshold (HRV suppressed, RHR elevated, TSB ≤ −20, or sleep score below 60)
-- `[OK]` if all metrics are within normal range
+- `[ALERT]` if the readiness band warrants an alert under the rules above, OR any secondary trigger is crossed
+- `[OK]` otherwise
 
 After the token, write 3-6 sentences:
-- Always state last night's sleep score and the recent HRV/RHR/form readings
-- State which metrics are concerning (if ALERT) or reassuring (if OK)
+- Lead with the readiness score and band; then summarise the supporting metrics — last night's sleep score, the 7-day running average HRV (and today's single-day HRV if far from normal), and the recent RHR/form readings
+- State which signals are concerning (if ALERT) or reassuring (if OK)
 - If ALERT and a structured workout is planned today: suggest a specific adjustment (e.g. replace intervals with 60 min easy Z2, or shorten duration by 30%)
 - If ALERT and no workout planned: advise rest or very light movement
-- If OK: brief confirmation that metrics support going ahead with today's plan
+- If OK: brief confirmation that today's plan can go ahead (note any low-readiness caveat to keep easy days easy)
 
 Constraints: do not create or modify any calendar events. Suggestions only.
 """
@@ -527,9 +567,12 @@ class TrainingAgent:
         days_back: int = 28,
         chat_model: str = "gpt-5.5",
         auto_review_model: str = "gpt-5.5",
+        readiness_entity: str = "",
     ):
         self.openai = OpenAI(api_key=openai_api_key)
         self.icu = IntervalsClient(intervals_athlete_id, intervals_api_key)
+        self.ha = HAClient()
+        self.readiness_entity = readiness_entity
         self.max_hours = max_hours
         self.max_tss = max_tss
         self.hrv_min = hrv_min
@@ -545,6 +588,28 @@ class TrainingAgent:
 
         self._prompt_cache: dict = {}  # "mode:hash" → prompt string
 
+    def _get_training_readiness(self) -> dict:
+        """Read the Garmin training-readiness entity from Home Assistant and
+        classify it into a band. Returns available=false when the entity is
+        not configured or the reading is missing/non-numeric, so the model
+        falls back to the intervals.icu metrics instead of inventing a value."""
+        if not self.readiness_entity:
+            return {"available": False, "reason": "No training readiness entity configured."}
+        state = self.ha.get_state(self.readiness_entity)
+        if not state:
+            return {"available": False, "reason": "Home Assistant entity unavailable or not reachable."}
+        raw = state.get("state")
+        try:
+            score = float(raw)
+        except (TypeError, ValueError):
+            return {"available": False, "reason": f"Readiness state is not numeric: {raw!r}."}
+        return {
+            "available": True,
+            "score": round(score),
+            "band": _readiness_band(score),
+            "attributes": state.get("attributes", {}),
+        }
+
     def _run_tool(self, name: str, args: dict) -> str:
         try:
             if name == "get_recent_activities":
@@ -553,6 +618,8 @@ class TrainingAgent:
                 result = self.icu.get_activity_intervals(args["activity_id"])
             elif name == "get_wellness":
                 result = self.icu.get_wellness(args.get("days_back", 14))
+            elif name == "get_training_readiness":
+                result = self._get_training_readiness()
             elif name == "get_planned_workouts":
                 result = self.icu.get_events(args.get("days_ahead", 35))
             elif name == "get_planned_workout":
@@ -951,7 +1018,7 @@ class TrainingAgent:
             rhr_max=self.rhr_max or 999,
         )
         wellness_tools = [t for t in TOOLS if t["function"]["name"] in {
-            "get_wellness", "get_planned_workouts",
+            "get_wellness", "get_training_readiness", "get_planned_workouts",
         }]
         messages = [
             {"role": "system", "content": system},

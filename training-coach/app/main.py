@@ -57,6 +57,7 @@ def load_options() -> dict:
         "chat_model": os.getenv("CHAT_MODEL", "gpt-5.5"),
         "auto_review_model": os.getenv("AUTO_REVIEW_MODEL", "gpt-5.5"),
         "ha_notification_target": os.getenv("HA_NOTIFICATION_TARGET", ""),
+        "training_readiness_entity": os.getenv("TRAINING_READINESS_ENTITY", "sensor.garmin_connect_morning_training_readiness"),
         "daily_token_budget": int(os.getenv("DAILY_TOKEN_BUDGET", "250000")),
     }
 
@@ -246,6 +247,7 @@ agent = TrainingAgent(
     days_back=options.get("days_back", 28),
     chat_model=options.get("chat_model", "gpt-5.5"),
     auto_review_model=options.get("auto_review_model", "gpt-5.5"),
+    readiness_entity=options.get("training_readiness_entity", ""),
 )
 
 
@@ -496,6 +498,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     needs_budget_confirmation: bool = False
+    over_budget: bool = False
 
 class HistoryResponse(BaseModel):
     messages: list
@@ -520,19 +523,24 @@ def chat(req: ChatRequest):
     if not acquired:
         raise HTTPException(status_code=503, detail="A request for this session is still processing. Please wait.")
     try:
-        # Daily token budget gate — pause and ask before spending beyond the free tier.
+        # Daily token budget gate. We never hard-stop a request: the turn that
+        # first crosses the free-tier limit runs to completion and just carries
+        # an advisory. Only *later* requests — made while already over the limit
+        # and not yet acknowledged for the day — pause for a confirmation popup.
         budget = options.get("daily_token_budget", 250000)
+        today = datetime.now().strftime("%Y-%m-%d")
+        over_before = False
         if budget and budget > 0:
-            today = datetime.now().strftime("%Y-%m-%d")
             with token_usage_lock:
                 used = token_usage.get("total_tokens", 0) if token_usage.get("date") == today else 0
-                over = used >= budget
+                over_before = used >= budget
                 acked = token_usage.get("ack_date") == today
-            if over and not acked and not req.confirm_over_budget:
+            if over_before and not acked and not req.confirm_over_budget:
                 msg = (f"⚠ You've used ~{used/1000:.0f}k tokens today, past the {budget/1000:.0f}k "
                        f"free-tier limit — further requests are pay-as-you-go. Continue?")
                 return ChatResponse(reply=msg, needs_budget_confirmation=True)
-            if over and req.confirm_over_budget and not acked:
+            if over_before and req.confirm_over_budget and not acked:
+                # Confirmation counts for the rest of the day — don't ask again.
                 with token_usage_lock:
                     token_usage["ack_date"] = today
                     save_token_usage(token_usage)
@@ -543,13 +551,20 @@ def chat(req: ChatRequest):
             history = sessions.get(req.session_id, [])
         reply, updated_history, usage = agent.chat(req.message, history, mode=req.mode)
         accumulate_tokens(usage)
+
+        # Advise (without blocking) when this is the turn that crossed the limit.
+        crossed_budget = False
+        if budget and budget > 0 and not over_before:
+            with token_usage_lock:
+                used_now = token_usage.get("total_tokens", 0) if token_usage.get("date") == today else 0
+            crossed_budget = used_now >= budget
         if len(updated_history) > MAX_HISTORY_MESSAGES:
             updated_history = updated_history[-MAX_HISTORY_MESSAGES:]
         with sessions_lock:
             sessions[req.session_id] = updated_history
             # Debounce the save — batch writes within 5 second window
             sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
-        return ChatResponse(reply=reply)
+        return ChatResponse(reply=reply, over_budget=crossed_budget)
     except HTTPException:
         raise
     except Exception as e:
