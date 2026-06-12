@@ -121,6 +121,7 @@ class ChainManager:
             "hours_remaining": round(hours_remaining, 2),
             "pct_remaining": round(pct_remaining, 1),
             "last_wax_date": last_wax_date,
+            "last_wax_ts": last_wax_ts,
         }
 
     def _compute_sealant_status(self, s: dict) -> dict:
@@ -364,6 +365,27 @@ class ChainManager:
             if not chain:
                 raise ValueError(f"Chain {chain_id!r} not found")
             chain.setdefault("wax_events", []).append({"date": date, "note": note, "ts": ts})
+            self._save()
+            return self._compute_status(chain)
+
+    def set_last_wax(self, chain_id: str, ts: str) -> dict:
+        """Correct the datetime of the most recent wax event (for when the
+        actual wax time differs from when it was logged). `ts` is an ISO
+        datetime string (e.g. from a <input type="datetime-local">)."""
+        with self._lock:
+            chain = next(
+                (c for c in self._data.get("chains", []) if c["id"] == chain_id), None
+            )
+            if not chain:
+                raise ValueError(f"Chain {chain_id!r} not found")
+            wax_events = chain.setdefault("wax_events", [])
+            date = ts[:10]
+            if wax_events:
+                latest = max(wax_events, key=self._wax_ts)
+                latest["date"] = date
+                latest["ts"] = ts
+            else:
+                wax_events.append({"date": date, "note": "", "ts": ts})
             self._save()
             return self._compute_status(chain)
 
