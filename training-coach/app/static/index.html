@@ -260,8 +260,9 @@
   /* Wear log dialog */
   .wear-dialog { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; width: min(600px, 95vw); display: flex; flex-direction: column; gap: 14px; max-height: 85vh; }
   .wear-dialog h3 { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px; color: var(--text); }
-  .wear-table-wrap { overflow-y: auto; flex: 1; }
-  .wear-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .wear-table-wrap { overflow-y: auto; overflow-x: hidden; flex: 1; }
+  .wear-table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }
+  .wear-table td, .wear-table th { overflow: hidden; text-overflow: ellipsis; }
   .wear-table th { text-align: left; padding: 6px 10px; color: var(--muted); font-weight: 400; border-bottom: 1px solid var(--border); letter-spacing: 0.06em; text-transform: uppercase; font-size: 10px; }
   .wear-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: middle; }
   .wear-table tr:last-child td { border-bottom: none; }
@@ -418,6 +419,22 @@
   </div>
 </div>
 
+<div class="dialog-overlay" id="wax-dialog-overlay" style="display:none">
+  <div class="chain-dialog">
+    <h3>Edit last wax time</h3>
+    <input type="hidden" id="wax-edit-chain-id">
+    <div class="form-group">
+      <div class="form-label">Waxed on</div>
+      <input class="form-input" type="datetime-local" id="wax-edit-ts">
+      <div class="form-hint">Correct this if the wax wasn't logged at the actual time it happened.</div>
+    </div>
+    <div class="dialog-btns">
+      <button class="btn-cancel" onclick="closeWaxDialog()">Cancel</button>
+      <button class="btn-create" onclick="saveWaxEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- Wear log dialog -->
 <div class="dialog-overlay" id="wear-dialog-overlay">
   <div class="wear-dialog">
@@ -426,14 +443,14 @@
       <table class="wear-table">
         <thead>
           <tr>
-            <th>Date</th>
+            <th style="width:74px">Date</th>
             <th>Activity</th>
             <th>Condition</th>
-            <th>Hrs</th>
-            <th>×</th>
-            <th>Consumed</th>
-            <th></th>
-            <th></th>
+            <th style="width:34px">Hrs</th>
+            <th style="width:30px">×</th>
+            <th style="width:56px">Consumed</th>
+            <th style="width:26px"></th>
+            <th style="width:26px"></th>
           </tr>
         </thead>
         <tbody id="wear-table-body"></tbody>
@@ -900,7 +917,7 @@
     if (!text) return;
     busy = true; sendBtn.disabled = true;
     inputEl.value = ''; inputEl.style.height = 'auto';
-    addMessage('user', text);
+    const userMsgEl = addMessage('user', text);
     showThinking();
 
     let historyBaseline = null;
@@ -934,11 +951,18 @@
           data = await postChat(true);
           hideThinking(); addMessage('coach', data.reply); refreshTokens();
         } else {
-          addMessage('coach', 'Stopped — your daily token budget was not exceeded further.');
+          // Cancelled — don't send, and don't acknowledge. Roll the prompt back
+          // into the input so the next send re-asks for confirmation.
+          userMsgEl?.remove();
+          inputEl.value = text; inputEl.style.height = 'auto';
         }
         return;
       }
       hideThinking(); addMessage('coach', data.reply); refreshTokens();
+      if (data.over_budget) {
+        addMessage('coach', '⚠ Heads up — that put you over your daily token budget. '
+          + 'Further requests today are pay-as-you-go; the next one will ask you to confirm.');
+      }
     } catch(e) {
       // TypeError typically means the connection was killed (e.g. ingress
       // proxy timeout). The backend may have completed and persisted the
@@ -1217,7 +1241,7 @@
           </div>
         </div>
         <div class="chain-dates">
-          <div class="chain-date-row"><span class="label">Last wax</span><span class="val">${escapeHtml(lastWax)}</span></div>
+          <div class="chain-date-row"><span class="label">Last wax</span><span class="val">${escapeHtml(lastWax)}${c.last_wax_ts ? ` <button class="btn-icon" title="Edit wax time" onclick="openEditWax('${sid}', '${escapeJs(c.last_wax_ts)}')">✎</button>` : ''}</span></div>
         </div>
         <div class="chain-btns" style="flex-wrap:wrap;align-items:center">${btns}</div>
       </div>`;
@@ -1255,6 +1279,33 @@
         body: JSON.stringify({ date: today, note: '' }),
       });
       if (!res.ok) throw new Error(await errDetail(res));
+      await loadChains();
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  function openEditWax(chainId, ts) {
+    document.getElementById('wax-edit-chain-id').value = chainId;
+    document.getElementById('wax-edit-ts').value = (ts || '').slice(0, 16);
+    document.getElementById('wax-dialog-overlay').style.display = 'flex';
+  }
+
+  function closeWaxDialog() {
+    document.getElementById('wax-dialog-overlay').style.display = 'none';
+  }
+
+  async function saveWaxEdit() {
+    const chainId = document.getElementById('wax-edit-chain-id').value;
+    let ts = document.getElementById('wax-edit-ts').value;
+    if (!ts) { alert('Please choose a date and time.'); return; }
+    if (ts.length === 16) ts += ':00';
+    try {
+      const res = await fetch(`${BASE}/chains/${encodeURIComponent(chainId)}/wax/last`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ts }),
+      });
+      if (!res.ok) throw new Error(await errDetail(res));
+      closeWaxDialog();
       await loadChains();
     } catch (e) { alert(`Error: ${e.message}`); }
   }
@@ -1562,14 +1613,13 @@
 
     row.innerHTML = `
       <td>${escapeHtml(entry.date)}</td>
-      <td style="font-size:10px;color:var(--muted)">${escapeHtml(entry.activity_name || '—')}</td>
+      <td title="${escapeHtml(entry.activity_name || '')}" style="font-size:10px;color:var(--muted);white-space:nowrap">${escapeHtml(entry.activity_name || '—')}</td>
       <td>
-        <select id="edit-cond-sel" class="form-select" style="font-size:11px;padding:3px 6px;min-width:120px">${condOpts}</select>
+        <select id="edit-cond-sel" class="form-select" style="font-size:11px;padding:3px 4px;width:100%;min-width:0">${condOpts}</select>
       </td>
-      <td colspan="2">
-        <select id="edit-chain-sel" class="form-select" style="font-size:11px;padding:3px 6px;min-width:100px" onchange="onEditChainChange(this.value,'${escapeJs(entry.condition)}')">${chainOpts}</select>
+      <td colspan="3">
+        <select id="edit-chain-sel" class="form-select" style="font-size:11px;padding:3px 4px;width:100%;min-width:0" onchange="onEditChainChange(this.value,'${escapeJs(entry.condition)}')">${chainOpts}</select>
       </td>
-      <td style="color:var(--muted);font-size:10px">${(entry.duration_hours || 0).toFixed(1)}h</td>
       <td><button class="wear-delete" title="Save" onclick="saveWearEdit()" style="color:var(--accent2)">✓</button></td>
       <td><button class="wear-delete" title="Cancel" onclick="cancelWearEdit()">✗</button></td>`;
   }

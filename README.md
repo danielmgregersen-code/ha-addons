@@ -6,15 +6,17 @@ An AI-powered cycling coach that lives inside Home Assistant and connects direct
 
 ## What it does
 
-### Three focused modes
+### Four focused modes
 
-The interface is split into three tabs, each with its own purpose, system prompt, and tool access:
+The interface is split into four tabs, each with its own purpose, system prompt, and tool access:
 
 **Review** — analysing rides you have already completed. Ask about interval execution, zone distribution, compliance with the planned session, or request a coach comment on a specific activity. The auto-review and weekly recap sessions also live here.
 
 **Health** — interpreting wellness data. Ask about HRV trends, recovery status, training load, or whether today's metrics warrant adjusting the plan. The daily wellness check session lives here. This mode is read-only — it never modifies your calendar.
 
 **Planning** — building and managing your training calendar. Create or modify workouts, plan multi-week blocks, prepare for upcoming races, review and update weekly notes.
+
+**Maintenance** — tracking chain wax wear and sealant top-offs across your bikes. See [Chain wax & sealant tracker](#chain-wax--sealant-tracker) below.
 
 Each mode maintains its own set of sessions in the sidebar, so review conversations never get mixed with planning conversations.
 
@@ -98,6 +100,54 @@ The three automated sessions — Auto-reviews, Weekly recaps, and Wellness check
 
 ### Token counter
 A daily token counter in the sidebar shows how many tokens have been used today across all chat and automated calls. It resets at midnight and persists across restarts.
+
+---
+
+## Chain wax & sealant tracker
+
+The **Maintenance** tab replaces a manual spreadsheet for tracking wax-lubed chain wear and tubeless sealant top-offs across multiple bikes. Chains are grouped into **Road** and **Gravel** sections.
+
+### Chain wax wear
+
+Each chain has a base wax life in hours. Every ride is automatically converted to "wear hours" using:
+
+```
+hours_consumed = (ride duration in hours) × condition multiplier
+```
+
+The condition is inferred automatically from the ride's sport type and weather data (precipitation, humidity), using a multiplier table specific to the bike type:
+
+| Condition | Gravel | Road |
+|---|---|---|
+| Home Trainer | 0.2× | 0.3× |
+| Tarmac | 0.75× | — |
+| Mostly Tarmac | 0.85× | — |
+| Standard Dry | 1.0× | 1.0× |
+| Pure Dust | 1.25× | — |
+| Fast Group/intervals | — | 1.15× |
+| Intermittent Puddles | 1.5× | — |
+| Damp Roads | — | 1.5× |
+| Constant Rain | 2.5× | — |
+| Active Rain | — | 2.5× |
+| Heavy Mud | 4.0× | — |
+
+Each chain card shows a progress bar of remaining wax life, the date it was last waxed, and a **Log wax** button that resets the counter. Every wear entry can be reviewed in the **Ride log**, where you can correct the auto-detected condition or move the entry to a different chain.
+
+### Bike identification (no Strava required)
+
+Rides are matched to a chain either by Strava `gear_id` (if you sync gear) or by the **power meter serial number** reported by Intervals.icu — letting wear tracking work even without Strava gear sync, as long as each bike has its own power meter.
+
+### Chain rotation, activation, and retirement
+
+You can register multiple chains per bike (a rotation). Only the **active** chain on a bike receives auto-logged wear; setting a different chain active deactivates the others on that bike and stamps an activation date, so newly-activated chains don't retroactively absorb past rides. A chain can be **retired** once worn out — it's sorted to the bottom of its section and stops appearing in matching, but its history is kept and it can be restored later.
+
+### Sealant tracking
+
+Sealant degrades on a calendar schedule rather than by ride time, so it's tracked separately from wax. Each Road/Gravel section shows a compact strip of sealant chips — one per bike — with a progress bar showing days elapsed since the last check/top-off versus your configured interval. Tap **✓** to log a check-in (you can back-date it), or **✎** to edit the tracker's name, interval, or correct the last check-in date if it wasn't logged the same day.
+
+### Low-life alerts
+
+When a chain's wax life or a sealant's interval drops to **25% remaining**, a one-shot notification appears. When either reaches **0% remaining**, the **Maintenance** tab shows a persistent badge that stays until you log a wax/check-in — even if you've already opened the tab — so it can't be missed.
 
 ---
 
