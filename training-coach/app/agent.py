@@ -1015,6 +1015,7 @@ class TrainingAgent:
             hrv_context=hrv_context,
             rhr_context=rhr_context,
             hrv_min=self.hrv_min or 0,
+            hrv_max=self.hrv_max or 0,
             rhr_max=self.rhr_max or 999,
         )
         wellness_tools = [t for t in TOOLS if t["function"]["name"] in {
