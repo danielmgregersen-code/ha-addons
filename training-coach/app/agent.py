@@ -388,7 +388,7 @@ Today's date: {today}
 
 Interpretation guidelines:
 - Training readiness: get_training_readiness returns a 0–100 score (higher is better) and its band — poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). It already folds together sleep, HRV status, recovery time, acute load and stress. Lead with it.
-- Factor breakdown: the same call returns level and feedback text, sleep_score + sleep_feedback, hrv_weekly_avg + hrv_feedback (Garmin's 7-day HRV), recovery_time + recovery_feedback, acute_load + load_balance_feedback (acute:chronic load), and stress_feedback. Use these to explain WHY readiness is where it is. The *_feedback labels (GOOD, VERY_GOOD, POOR, …) are the robust signal — lean on them rather than guessing units.
+- Factor breakdown: the same call returns the factors that explain the score. Sleep and recovery are the two main ones: sleep_score + sleep_feedback, and recovery_time (in MINUTES until full recovery) + recovery_feedback. Also returned: level and feedback text, HRV — both hrv_weekly_avg (Garmin's 7-day average) and hrv_last_night (last night, ms) — with hrv_feedback, acute_load + load_balance_feedback (acute:chronic load), and stress_feedback. The *_feedback labels (GOOD, VERY_GOOD, POOR, …) are the robust signal — lean on them rather than guessing units.
 - If get_training_readiness returns available=false, say plainly that today's readiness could not be read, rather than inventing numbers.
 - To advise on whether to adjust today's session, call get_planned_workouts(days_ahead=1) and weigh the readiness band against how hard the planned session is (a low band matters most on an interval/hard day).
 
@@ -575,7 +575,7 @@ Today's date: {today}
 
 PRIMARY SIGNAL — Garmin training readiness:
 - get_training_readiness returns today's readiness score (0–100, higher is better) and its band: poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). The score already folds together sleep, HRV status, recovery time, acute load and stress.
-- It also returns the factor breakdown that explains the score — use these to say WHY readiness is where it is: level (e.g. HIGH) and feedback text, sleep_score + sleep_feedback, hrv_weekly_avg + hrv_feedback (Garmin's 7-day HRV), recovery_time + recovery_feedback, acute_load + load_balance_feedback (acute:chronic load), and stress_feedback. The *_feedback labels (e.g. GOOD, VERY_GOOD, POOR) are the robust signal — lean on them rather than guessing units.
+- It also returns the factor breakdown that explains the score — use these to say WHY readiness is where it is. Sleep and recovery are the two main factors: sleep_score + sleep_feedback, and recovery_time (in MINUTES until full recovery) + recovery_feedback. The remaining factors are level (e.g. HIGH) and feedback text, HRV — both hrv_weekly_avg (Garmin's 7-day average) and hrv_last_night (last night's average, in ms) — with hrv_feedback, acute_load + load_balance_feedback (acute:chronic load), and stress_feedback. The *_feedback labels (e.g. GOOD, VERY_GOOD, POOR) are the robust signal — lean on them rather than guessing units.
 
 Alert logic — the readiness band drives the alert, conditioned on today's planned workout:
 - poor (≤24): ALWAYS an alert, no matter what is planned (or if nothing is planned). The body needs rest.
@@ -594,7 +594,7 @@ IMPORTANT — begin your response with exactly one of these tokens on its own li
 - `[OK]` otherwise
 
 After the token, write 3-6 sentences:
-- Lead with the readiness score, level and band; then summarise the factor breakdown that explains it (sleep, HRV weekly average, recovery, load balance, stress)
+- Lead with the readiness score, level and band; then always state the two main factors — last night's sleep score and the recovery time in minutes — followed by both HRV figures (weekly average and last night, ms), load balance and stress
 - State which signals are concerning (if ALERT) or reassuring (if OK)
 - If ALERT and a structured workout is planned today: suggest a specific adjustment (e.g. replace intervals with 60 min easy Z2, or shorten duration by 30%)
 - If ALERT and no workout planned: advise rest or very light movement
@@ -623,11 +623,13 @@ class TrainingAgent:
         chat_model: str = "gpt-5.5",
         auto_review_model: str = "gpt-5.5",
         readiness_entity: str = "",
+        nightly_hrv_entity: str = "",
     ):
         self.openai = OpenAI(api_key=openai_api_key)
         self.icu = IntervalsClient(intervals_athlete_id, intervals_api_key)
         self.ha = HAClient()
         self.readiness_entity = readiness_entity
+        self.nightly_hrv_entity = nightly_hrv_entity
         self.max_hours = max_hours
         self.max_tss = max_tss
         self.hrv_min = hrv_min
@@ -662,7 +664,7 @@ class TrainingAgent:
                 score = float(attrs.get("score"))
             except (TypeError, ValueError):
                 return {"available": False, "reason": f"Readiness score not available yet (state={state.get('state')!r})."}
-        return {
+        result = {
             "available": True,
             "score": round(score),
             "band": _readiness_band(score),
@@ -672,6 +674,7 @@ class TrainingAgent:
             "sleep_score": attrs.get("sleepScore"),
             "sleep_feedback": attrs.get("sleepScoreFactorFeedback"),
             "hrv_weekly_avg": attrs.get("hrvWeeklyAverage"),
+            "hrv_last_night": self._get_nightly_hrv(),
             "hrv_feedback": attrs.get("hrvFactorFeedback"),
             "recovery_time": attrs.get("recoveryTime"),
             "recovery_feedback": attrs.get("recoveryTimeFactorFeedback"),
@@ -680,6 +683,21 @@ class TrainingAgent:
             "stress_feedback": attrs.get("stressHistoryFactorFeedback"),
             "calendar_date": attrs.get("calendarDate"),
         }
+        return result
+
+    def _get_nightly_hrv(self):
+        """Read last night's average HRV (ms) from its own Garmin entity.
+        Returns the numeric value, or None if not configured / unreachable /
+        not yet a number (best-effort; never blocks the readiness check)."""
+        if not self.nightly_hrv_entity:
+            return None
+        state = self.ha.get_state(self.nightly_hrv_entity)
+        if not state:
+            return None
+        try:
+            return round(float(state.get("state")))
+        except (TypeError, ValueError):
+            return None
 
     def training_readiness_available(self) -> bool:
         """True only when a readiness entity is configured AND currently returns

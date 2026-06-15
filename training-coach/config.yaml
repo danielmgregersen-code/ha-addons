@@ -1,6 +1,6 @@
 name: "Training Coach"
 description: "AI coaching agent connected to your Intervals.icu training data."
-version: "1.2.11"
+version: "1.2.12"
 slug: "training_coach"
 init: false
 arch:
@@ -39,6 +39,7 @@ options:
   auto_review_model: "gpt-5.5"
   ha_notification_target: ""
   training_readiness_entity: "sensor.garmin_connect_training_readiness"
+  nightly_hrv_entity: "sensor.garmin_connect_hrv_last_night_average"
   daily_token_budget: 250000
 
 schema:
@@ -60,6 +61,7 @@ schema:
   auto_review_model: str
   ha_notification_target: str
   training_readiness_entity: str
+  nightly_hrv_entity: str
   daily_token_budget: int
 
 homeassistant_api: true
