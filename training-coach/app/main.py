@@ -57,7 +57,8 @@ def load_options() -> dict:
         "chat_model": os.getenv("CHAT_MODEL", "gpt-5.5"),
         "auto_review_model": os.getenv("AUTO_REVIEW_MODEL", "gpt-5.5"),
         "ha_notification_target": os.getenv("HA_NOTIFICATION_TARGET", ""),
-        "training_readiness_entity": os.getenv("TRAINING_READINESS_ENTITY", "sensor.garmin_connect_morning_training_readiness"),
+        "training_readiness_entity": os.getenv("TRAINING_READINESS_ENTITY", "sensor.garmin_connect_training_readiness"),
+        "nightly_hrv_entity": os.getenv("NIGHTLY_HRV_ENTITY", "sensor.garmin_connect_hrv_last_night_average"),
         "daily_token_budget": int(os.getenv("DAILY_TOKEN_BUDGET", "250000")),
     }
 
@@ -248,6 +249,7 @@ agent = TrainingAgent(
     chat_model=options.get("chat_model", "gpt-5.5"),
     auto_review_model=options.get("auto_review_model", "gpt-5.5"),
     readiness_entity=options.get("training_readiness_entity", ""),
+    nightly_hrv_entity=options.get("nightly_hrv_entity", ""),
 )
 
 
@@ -319,6 +321,14 @@ async def wellness_check_loop():
             state = _load_json_file(WELLNESS_STATE_FILE, {})
             if state.get("last_date") == today:
                 continue
+            # If a Garmin readiness entity is configured, hold the check until it
+            # publishes a score — it often reads "unavailable" for a while after
+            # waking — but never wait past 10:00, after which we run with whatever
+            # data is available.
+            if agent.readiness_entity and now.hour < 10:
+                if not await asyncio.to_thread(agent.training_readiness_available):
+                    print(f"Wellness check deferred for {today}: training readiness not ready yet.", flush=True)
+                    continue
             print(f"Running wellness check for {today}", flush=True)
             message, is_alert, usage = agent.wellness_check()
             accumulate_tokens(usage)

@@ -273,7 +273,12 @@ _REVIEW_TOOL_NAMES = {
     "get_coach_ticks", "post_activity_comment",
 }
 _HEALTH_TOOL_NAMES = {
-    "get_wellness", "get_training_readiness", "get_coach_ticks",
+    "get_wellness", "get_coach_ticks",
+}
+# Health tools when a Garmin readiness entity is configured: readiness replaces the
+# Intervals wellness data; the plan lookup is kept so the chat can advise on today's session.
+_HEALTH_READINESS_TOOL_NAMES = {
+    "get_training_readiness", "get_planned_workouts", "get_coach_ticks",
 }
 _PLANNING_TOOL_NAMES = {
     "get_planned_workouts", "get_upcoming_races", "get_weekly_note", "write_weekly_note",
@@ -286,6 +291,7 @@ TOOLS_BY_MODE = {
     "health":   [t for t in TOOLS if t["function"]["name"] in _HEALTH_TOOL_NAMES],
     "planning": [t for t in TOOLS if t["function"]["name"] in _PLANNING_TOOL_NAMES],
 }
+_HEALTH_READINESS_TOOLS = [t for t in TOOLS if t["function"]["name"] in _HEALTH_READINESS_TOOL_NAMES]
 
 AUTO_REVIEW_SYSTEM_PROMPT = """You are an expert cycling coach reviewing a recently completed ride.
 You have direct access to the athlete's training data via Intervals.icu.
@@ -357,7 +363,6 @@ Athlete baselines:
 {rhr_context}
 
 Interpretation guidelines:
-- Training readiness (Garmin, via get_training_readiness): a single 0–100 score, higher is better, that folds together sleep, recovery, HRV status and load. Bands: poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). When available, lead with it as the primary readiness signal and use the metrics below to explain it. If get_training_readiness returns available=false, rely on the HRV/RHR/sleep/form signals instead
 - HRV: compare each day's reading to the athlete's normal range. Consistently below baseline = accumulated fatigue or illness. Trending up = adapting well. Single low readings after hard efforts are normal
 - Resting HR: elevated (above normal range) on waking suggests incomplete recovery or illness. Trending down over weeks means improving aerobic fitness
 - Fatigue/form/fitness (CTL/ATL/TSB): CTL = fitness (chronic load), ATL = fatigue (acute load), TSB (form) = CTL − ATL. Very negative form (< −20) = high injury/illness risk
@@ -373,6 +378,28 @@ Constraints:
 - Do not create, update, or delete any calendar events — this mode is read-only
 - Do not analyse interval execution or zone distribution — redirect to Review mode for that
 - Fetch only as much history as the question needs (default 14 days for wellness trends)
+"""
+
+HEALTH_READINESS_SYSTEM_PROMPT = """Act as an expert sports science advisor interpreting recovery data for an endurance cyclist.
+The athlete's recovery is measured by Garmin training readiness, read from Home Assistant via get_training_readiness. Today's planned workout, if needed, comes from Intervals.icu via get_planned_workouts.
+Your role is to interpret these signals and advise whether the current training plan should be adjusted. This mode is read-only.
+
+Today's date: {today}
+
+Interpretation guidelines:
+- Training readiness: get_training_readiness returns a 0–100 score (higher is better) and its band — poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). It already folds together sleep, HRV status, recovery time, acute load and stress. Lead with it.
+- Factor breakdown: the same call returns the factors that explain the score. Sleep and recovery are the two main ones: sleep_score + sleep_feedback, and recovery_time (in MINUTES until full recovery) + recovery_feedback. Also returned: level and feedback text, HRV — both hrv_weekly_avg (Garmin's 7-day average) and hrv_last_night (last night, ms) — with hrv_feedback, acute_load + load_balance_feedback (acute:chronic load), and stress_feedback. The *_feedback labels (GOOD, VERY_GOOD, POOR, …) are the robust signal — lean on them rather than guessing units.
+- If get_training_readiness returns available=false, say plainly that today's readiness could not be read, rather than inventing numbers.
+- To advise on whether to adjust today's session, call get_planned_workouts(days_ahead=1) and weigh the readiness band against how hard the planned session is (a low band matters most on an interval/hard day).
+
+Recommendations (only when data supports it):
+- Soften today's or tomorrow's session: suggest reducing intensity or duration by 10–20%
+- Extend recovery: flag if an extra easy day is needed before resuming intensity
+- Proceed as planned: state this clearly when readiness looks normal — don't manufacture concern
+
+Constraints:
+- Do not create, update, or delete any calendar events — this mode is read-only
+- Do not analyse interval execution or zone distribution — redirect to Review mode for that
 """
 
 PLANNING_SYSTEM_PROMPT = """Act as an expert endurance cycling coach building and managing training plans for a time-crunched athlete.
@@ -510,36 +537,64 @@ You have direct access to the athlete's training data via Intervals.icu.
 Today's date: {today}
 
 Athlete baselines: {hrv_context} {rhr_context}
+Alert thresholds: a 7-day running average HRV below {hrv_min} ms is suppressed. RHR above {rhr_max} bpm is elevated. TSB (form) below −20 is high-fatigue risk. Sleep score below 60 (out of 100) is poor.
+
+HRV interpretation — read this carefully:
+- Compute a 7-day running average HRV from the daily readings returned (mean of the available HRV values over the last 7 days). This running average is your PRIMARY HRV signal — it filters out day-to-day noise and reflects the athlete's true recovery state.
+- Base your HRV assessment on the 7-day running average. A suppressed running average (below {hrv_min} ms) or a clear downward trend in the running average indicates accumulated fatigue or illness and is the main driver of an HRV-related alert.
+- Also note today's single-day HRV reading, but treat it as secondary. A single low reading after a hard effort is normal and does NOT by itself warrant an alert when the running average is healthy.
+- HOWEVER, call out the single-day reading explicitly whenever it is far from the normal range (roughly more than ~15% outside {hrv_min}–{hrv_max}, in either direction). A single day that is dramatically low — even with a healthy running average — is worth flagging as something to watch, and a single day that is dramatically high may indicate a measurement issue or parasympathetic rebound.
+
+Your task:
+1. Call get_wellness(days_back=7) to get a full week of HRV, RHR, fatigue, form, and sleep readings (sleepScore 0–100, sleepSecs)
+2. Call get_planned_workouts(days_ahead=1) to see if there is a structured workout planned today
+3. Compute the 7-day running average HRV and assess it against the normal range; separately note today's single-day HRV
+4. Assess whether any metric crosses the alert threshold above
+5. Write a brief morning check-in
+
+IMPORTANT — begin your response with exactly one of these tokens on its own line:
+- `[ALERT]` if ANY metric is at or beyond an alert threshold (7-day running average HRV suppressed, RHR elevated, TSB ≤ −20, or sleep score below 60)
+- `[OK]` if all metrics are within normal range
+
+After the token, write 3-6 sentences:
+- Always state last night's sleep score, the 7-day running average HRV, today's single-day HRV, and the recent RHR/form readings
+- Lead your HRV comment with the 7-day running average; mention the single-day reading after it, and explicitly call it out if it is far from the normal range
+- State which metrics are concerning (if ALERT) or reassuring (if OK)
+- If ALERT and a structured workout is planned today: suggest a specific adjustment (e.g. replace intervals with 60 min easy Z2, or shorten duration by 30%)
+- If ALERT and no workout planned: advise rest or very light movement
+- If OK: brief confirmation that metrics support going ahead with today's plan
+
+Constraints: do not create or modify any calendar events. Suggestions only.
+"""
+
+
+WELLNESS_CHECK_READINESS_PROMPT = """You are an expert sports science advisor running a morning wellness check for an endurance cyclist.
+The athlete's recovery is measured by Garmin training readiness, read from Home Assistant. Today's planned workout comes from Intervals.icu.
+
+Today's date: {today}
 
 PRIMARY SIGNAL — Garmin training readiness:
-- Training readiness is a single 0–100 score (higher is better) that already folds together sleep, recovery time, HRV status, acute load and stress. Treat it as the PRIMARY signal for this check and lead your assessment with it.
-- It falls into one of five bands: poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). The get_training_readiness tool returns both the score and the band.
-- The HRV, RHR, sleep and form metrics from Intervals.icu are SUPPORTING detail: use them to explain WHY readiness is where it is, and as secondary alert triggers in their own right.
+- get_training_readiness returns today's readiness score (0–100, higher is better) and its band: poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). The score already folds together sleep, HRV status, recovery time, acute load and stress.
+- It also returns the factor breakdown that explains the score — use these to say WHY readiness is where it is. Sleep and recovery are the two main factors: sleep_score + sleep_feedback, and recovery_time (in MINUTES until full recovery) + recovery_feedback. The remaining factors are level (e.g. HIGH) and feedback text, HRV — both hrv_weekly_avg (Garmin's 7-day average) and hrv_last_night (last night's average, in ms) — with hrv_feedback, acute_load + load_balance_feedback (acute:chronic load), and stress_feedback. The *_feedback labels (e.g. GOOD, VERY_GOOD, POOR) are the robust signal — lean on them rather than guessing units.
 
 Alert logic — the readiness band drives the alert, conditioned on today's planned workout:
 - poor (≤24): ALWAYS an alert, no matter what is planned (or if nothing is planned). The body needs rest.
 - low (25–49): an alert ONLY if a hard / interval / structured intensity workout is planned today. Low readiness on an easy/Z2/recovery/rest day — or a day with no workout — is NOT an alert; note it and advise keeping any session genuinely easy.
-- moderate / high / prime (≥50): readiness itself is not an alert.
-- Secondary triggers (independent of readiness band): 7-day running average HRV below {hrv_min} ms (see HRV note), RHR above {rhr_max} bpm, TSB (form) below −20, or sleep score below 60 (out of 100). Any of these also warrants an alert.
-- If training readiness is unavailable (get_training_readiness returns available=false), fall back to the HRV/RHR/sleep/form logic below and say briefly that readiness could not be read.
-
-HRV interpretation (supporting signal):
-- Compute a 7-day running average HRV from the daily readings (mean of the available HRV values over the last 7 days). This running average is your primary HRV signal — it filters out day-to-day noise. A suppressed running average (below {hrv_min} ms) or a clear downward trend indicates accumulated fatigue or illness.
-- Also note today's single-day HRV, but treat it as secondary: a single low reading after a hard effort is normal and does not by itself warrant an alert when the running average is healthy. HOWEVER, explicitly call out the single-day reading whenever it is far from the normal range (roughly more than ~15% outside {hrv_min}–{hrv_max}, in either direction).
+- moderate / high / prime (≥50): not an alert. If a specific factor reads clearly poor (e.g. sleep_feedback or hrv_feedback is POOR/LOW), call it out as a watch-item, but it does not by itself flip to an alert.
+- If readiness is unavailable (get_training_readiness returns available=false): do NOT alert. Write a brief [OK] note that today's readiness could not be read and advise proceeding with the plan as scheduled while listening to the body.
 
 Your task:
-1. Call get_training_readiness to get today's Garmin readiness score and band
+1. Call get_training_readiness to get today's score, band and factor breakdown
 2. Call get_planned_workouts(days_ahead=1) to see whether a structured/interval workout is planned today and how hard it is
-3. Call get_wellness(days_back=7) to get a full week of HRV, RHR, fatigue, form, and sleep readings (sleepScore 0–100, sleepSecs)
-4. Apply the alert logic above (readiness band + planned workout, plus the secondary triggers)
-5. Write a brief morning check-in
+3. Apply the alert logic above (readiness band + planned workout)
+4. Write a brief morning check-in
 
 IMPORTANT — begin your response with exactly one of these tokens on its own line:
-- `[ALERT]` if the readiness band warrants an alert under the rules above, OR any secondary trigger is crossed
+- `[ALERT]` if the readiness band warrants an alert under the rules above
 - `[OK]` otherwise
 
 After the token, write 3-6 sentences:
-- Lead with the readiness score and band; then summarise the supporting metrics — last night's sleep score, the 7-day running average HRV (and today's single-day HRV if far from normal), and the recent RHR/form readings
+- Lead with the readiness score, level and band; then always state the two main factors — last night's sleep score and the recovery time in minutes — followed by both HRV figures (weekly average and last night, ms), load balance and stress
 - State which signals are concerning (if ALERT) or reassuring (if OK)
 - If ALERT and a structured workout is planned today: suggest a specific adjustment (e.g. replace intervals with 60 min easy Z2, or shorten duration by 30%)
 - If ALERT and no workout planned: advise rest or very light movement
@@ -568,11 +623,13 @@ class TrainingAgent:
         chat_model: str = "gpt-5.5",
         auto_review_model: str = "gpt-5.5",
         readiness_entity: str = "",
+        nightly_hrv_entity: str = "",
     ):
         self.openai = OpenAI(api_key=openai_api_key)
         self.icu = IntervalsClient(intervals_athlete_id, intervals_api_key)
         self.ha = HAClient()
         self.readiness_entity = readiness_entity
+        self.nightly_hrv_entity = nightly_hrv_entity
         self.max_hours = max_hours
         self.max_tss = max_tss
         self.hrv_min = hrv_min
@@ -590,25 +647,65 @@ class TrainingAgent:
 
     def _get_training_readiness(self) -> dict:
         """Read the Garmin training-readiness entity from Home Assistant and
-        classify it into a band. Returns available=false when the entity is
-        not configured or the reading is missing/non-numeric, so the model
-        falls back to the intervals.icu metrics instead of inventing a value."""
+        surface its score, band, and the recovery factor breakdown carried in
+        the entity attributes. Returns available=false when the entity is not
+        configured, unreachable, or has no numeric score yet."""
         if not self.readiness_entity:
             return {"available": False, "reason": "No training readiness entity configured."}
         state = self.ha.get_state(self.readiness_entity)
         if not state:
             return {"available": False, "reason": "Home Assistant entity unavailable or not reachable."}
-        raw = state.get("state")
+        attrs = state.get("attributes", {}) or {}
+        # The state is the readiness score (e.g. "79"); fall back to the score attribute.
         try:
-            score = float(raw)
+            score = float(state.get("state"))
         except (TypeError, ValueError):
-            return {"available": False, "reason": f"Readiness state is not numeric: {raw!r}."}
-        return {
+            try:
+                score = float(attrs.get("score"))
+            except (TypeError, ValueError):
+                return {"available": False, "reason": f"Readiness score not available yet (state={state.get('state')!r})."}
+        result = {
             "available": True,
             "score": round(score),
             "band": _readiness_band(score),
-            "attributes": state.get("attributes", {}),
+            "level": attrs.get("level"),
+            "feedback": attrs.get("feedbackShort"),
+            "feedback_detail": attrs.get("feedbackLong"),
+            "sleep_score": attrs.get("sleepScore"),
+            "sleep_feedback": attrs.get("sleepScoreFactorFeedback"),
+            "hrv_weekly_avg": attrs.get("hrvWeeklyAverage"),
+            "hrv_last_night": self._get_nightly_hrv(),
+            "hrv_feedback": attrs.get("hrvFactorFeedback"),
+            "recovery_time": attrs.get("recoveryTime"),
+            "recovery_feedback": attrs.get("recoveryTimeFactorFeedback"),
+            "acute_load": attrs.get("acuteLoad"),
+            "load_balance_feedback": attrs.get("acwrFactorFeedback"),
+            "stress_feedback": attrs.get("stressHistoryFactorFeedback"),
+            "calendar_date": attrs.get("calendarDate"),
         }
+        return result
+
+    def _get_nightly_hrv(self):
+        """Read last night's average HRV (ms) from its own Garmin entity.
+        Returns the numeric value, or None if not configured / unreachable /
+        not yet a number (best-effort; never blocks the readiness check)."""
+        if not self.nightly_hrv_entity:
+            return None
+        state = self.ha.get_state(self.nightly_hrv_entity)
+        if not state:
+            return None
+        try:
+            return round(float(state.get("state")))
+        except (TypeError, ValueError):
+            return None
+
+    def training_readiness_available(self) -> bool:
+        """True only when a readiness entity is configured AND currently returns
+        a numeric score. Used to defer the morning check until Garmin has
+        published the reading (it often reads 'unavailable' for a while)."""
+        if not self.readiness_entity:
+            return False
+        return self._get_training_readiness().get("available", False)
 
     def _run_tool(self, name: str, args: dict) -> str:
         try:
@@ -728,6 +825,7 @@ class TrainingAgent:
             self.hard_intervals_per_week,
             self.block_start_date,
             tuple(self.group_ride_keywords),
+            bool(self.readiness_entity),
             today.isoformat(),
         )
         cache_key = hashlib.md5(str(config_key).encode()).hexdigest()
@@ -764,11 +862,14 @@ class TrainingAgent:
         group_context = f"Group ride auto-detection keywords: {kw_str}."
 
         if mode == "health":
-            prompt = HEALTH_SYSTEM_PROMPT.format(
-                today=today.isoformat(),
-                hrv_context=hrv_context,
-                rhr_context=rhr_context,
-            )
+            if self.readiness_entity:
+                prompt = HEALTH_READINESS_SYSTEM_PROMPT.format(today=today.isoformat())
+            else:
+                prompt = HEALTH_SYSTEM_PROMPT.format(
+                    today=today.isoformat(),
+                    hrv_context=hrv_context,
+                    rhr_context=rhr_context,
+                )
         elif mode == "planning":
             prompt = PLANNING_SYSTEM_PROMPT.format(
                 today=today.isoformat(),
@@ -783,6 +884,13 @@ class TrainingAgent:
 
         self._prompt_cache[cache_key] = prompt
         return prompt
+
+    def _tools_for_mode(self, mode: str) -> list:
+        """Tools available in a chat mode. Health uses the Garmin readiness tool set
+        when a readiness entity is configured, otherwise the Intervals wellness set."""
+        if mode == "health" and self.readiness_entity:
+            return _HEALTH_READINESS_TOOLS
+        return TOOLS_BY_MODE.get(mode, TOOLS_BY_MODE["review"])
 
     def _safe_role(self, m) -> str:
         """Get role from either a dict or a ChatCompletionMessage object."""
@@ -827,7 +935,7 @@ class TrainingAgent:
         messages += trimmed_history
         messages.append({"role": "user", "content": user_message})
 
-        tools = TOOLS_BY_MODE.get(mode, TOOLS_BY_MODE["review"])
+        tools = self._tools_for_mode(mode)
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         max_iterations = 25
         for _ in range(max_iterations):
@@ -999,28 +1107,33 @@ class TrainingAgent:
         raise RuntimeError("Weekly recap tool loop exceeded max iterations.")
 
     def wellness_check(self) -> tuple[str, bool, dict]:
-        """Check today's wellness against baselines. Returns (message, is_alert, usage)."""
+        """Check today's wellness. Uses Garmin training readiness when a readiness
+        entity is configured, otherwise the Intervals.icu HRV/RHR/sleep/form logic.
+        Returns (message, is_alert, usage)."""
         from datetime import date as date_cls
         today = date_cls.today()
-        hrv_context = (
-            f"HRV normal range: {self.hrv_min}–{self.hrv_max} ms."
-            if self.hrv_min and self.hrv_max else "HRV range: not configured."
-        )
-        rhr_context = (
-            f"Resting HR normal range: {self.rhr_min}–{self.rhr_max} bpm."
-            if self.rhr_min and self.rhr_max else "Resting HR range: not configured."
-        )
-        system = WELLNESS_CHECK_SYSTEM_PROMPT.format(
-            today=today.isoformat(),
-            hrv_context=hrv_context,
-            rhr_context=rhr_context,
-            hrv_min=self.hrv_min or 0,
-            hrv_max=self.hrv_max or 0,
-            rhr_max=self.rhr_max or 999,
-        )
-        wellness_tools = [t for t in TOOLS if t["function"]["name"] in {
-            "get_wellness", "get_training_readiness", "get_planned_workouts",
-        }]
+        if self.readiness_entity:
+            system = WELLNESS_CHECK_READINESS_PROMPT.format(today=today.isoformat())
+            tool_names = {"get_training_readiness", "get_planned_workouts"}
+        else:
+            hrv_context = (
+                f"HRV normal range: {self.hrv_min}–{self.hrv_max} ms."
+                if self.hrv_min and self.hrv_max else "HRV range: not configured."
+            )
+            rhr_context = (
+                f"Resting HR normal range: {self.rhr_min}–{self.rhr_max} bpm."
+                if self.rhr_min and self.rhr_max else "Resting HR range: not configured."
+            )
+            system = WELLNESS_CHECK_SYSTEM_PROMPT.format(
+                today=today.isoformat(),
+                hrv_context=hrv_context,
+                rhr_context=rhr_context,
+                hrv_min=self.hrv_min or 0,
+                hrv_max=self.hrv_max or 0,
+                rhr_max=self.rhr_max or 999,
+            )
+            tool_names = {"get_wellness", "get_planned_workouts"}
+        wellness_tools = [t for t in TOOLS if t["function"]["name"] in tool_names]
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": "Run this morning's wellness check."},

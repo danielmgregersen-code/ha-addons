@@ -12,7 +12,7 @@ The interface is split into four tabs, each with its own purpose, system prompt,
 
 **Review** — analysing rides you have already completed. Ask about interval execution, zone distribution, compliance with the planned session, or request a coach comment on a specific activity. The auto-review and weekly recap sessions also live here.
 
-**Health** — interpreting wellness data. Ask about HRV trends, recovery status, training load, or whether today's metrics warrant adjusting the plan. The daily wellness check session lives here. This mode is read-only — it never modifies your calendar.
+**Health** — interpreting recovery data. Ask about recovery status, readiness, or whether today's metrics warrant adjusting the plan. When a Garmin training readiness entity is configured this mode reads that score and its factor breakdown; otherwise it uses your Intervals.icu HRV/RHR/sleep/form trends. The daily wellness check session lives here. This mode is read-only — it never modifies your calendar.
 
 **Planning** — building and managing your training calendar. Create or modify workouts, plan multi-week blocks, prepare for upcoming races, review and update weekly notes.
 
@@ -35,9 +35,13 @@ Every Monday morning the coach automatically generates a structured training rec
 The recap is stored in the **📊 Weekly recaps** session (Review tab) and a notification card appears. If you have configured a push target it also sends a summary to your phone.
 
 ### Daily wellness check (every morning)
-Every morning the coach checks your latest wellness metrics against your configured baselines. When a Garmin **training readiness** entity is configured (`training_readiness_entity`), that 0–100 score is the **primary signal** — it already folds together sleep, recovery, HRV status and load. It is classified into Garmin's bands (poor 1–24, low 25–49, moderate 50–74, high 75–94, prime 95–100), and the alert is conditioned on what's planned: a **poor** score always alerts, a **low** score alerts only when a hard/interval session is planned (low on an easy or rest day is fine), and **moderate or better** does not alert on its own.
+Every morning the coach runs a recovery check and, if today's session warrants it, suggests an adjustment.
 
-The Intervals.icu metrics are the supporting detail that explain the score. HRV is judged primarily on a **7-day running average** (which filters out day-to-day noise) while still noting today's single-day reading and flagging it when it is far from your normal range. A suppressed running-average HRV, resting HR above your range, form score (TSB) below −20, or a sleep score below 60 each independently raises an alert too. On any alert the coach tells you which signal is concerning, looks at what is planned for the day, and suggests a specific adjustment (e.g. replace intervals with 60 minutes of easy Z2, or shorten the session by 30%). If no readiness entity is set or it can't be read, the check falls back to the HRV/RHR/sleep/form logic.
+**With a Garmin training readiness entity** (`training_readiness_entity`, the default): the whole check is driven by that single 0–100 score, which already folds together sleep, HRV status, recovery time, acute load and stress. It is classified into Garmin's bands (poor 1–24, low 25–49, moderate 50–74, high 75–94, prime 95–100), and the coach explains it using the factor breakdown carried in the entity. Sleep and recovery are reported as the two headline factors — last night's sleep score and the recovery time in minutes — followed by HRV (both Garmin's weekly average and last night's average in ms, the latter pulled from `nightly_hrv_entity`), load balance and stress, each with Garmin's own GOOD/VERY_GOOD/… feedback. The alert is conditioned on what's planned: a **poor** score always alerts, a **low** score alerts only when a hard/interval session is planned (low on an easy or rest day is fine), and **moderate or better** does not alert on its own. Intervals.icu is used only to look up today's planned workout. If readiness can't be read that morning it records a quiet `[OK]` note rather than alerting.
+
+**Without a readiness entity** (leave `training_readiness_entity` empty): the check falls back to your Intervals.icu wellness data. HRV is judged primarily on a **7-day running average** (which filters out day-to-day noise) while still noting today's single-day reading and flagging it when it is far from your normal range. A suppressed running-average HRV, resting HR above your range, form score (TSB) below −20, or a sleep score below 60 each raises an alert, and the coach suggests a specific adjustment (e.g. replace intervals with 60 minutes of easy Z2, or shorten the session by 30%).
+
+The check runs from 07:00 onward. When a readiness entity is configured, it waits for that entity to publish a score before running (Garmin often reports `unavailable` for a while after you wake) — but no later than 10:00, after which it runs with whatever data is available.
 
 On normal days the check runs silently and records an `[OK]` entry. Push notifications and banner cards are shown only when an alert fires.
 
@@ -207,7 +211,8 @@ Paste your athlete ID into `intervals_athlete_id` and your API key into `interva
 | `chat_model` | OpenAI model used for interactive chat (default: `gpt-5.5`) |
 | `auto_review_model` | OpenAI model used for all automated tasks — auto-review, weekly recap, wellness check (default: `gpt-5.5`) |
 | `ha_notification_target` | HA notify service name for push notifications, e.g. `mobile_app_iphone`. Leave empty to disable push |
-| `training_readiness_entity` | Home Assistant entity holding your Garmin morning training readiness score (0–100). Default: `sensor.garmin_connect_morning_training_readiness`. Leave empty to disable. When set, the wellness check uses it as the primary signal (bands: poor 1–24, low 25–49, moderate 50–74, high 75–94, prime 95–100) |
+| `training_readiness_entity` | Home Assistant entity holding your Garmin training readiness score (0–100). Default: `sensor.garmin_connect_training_readiness`. When set, the wellness check and Health tab are driven by this score and its factor breakdown (bands: poor 1–24, low 25–49, moderate 50–74, high 75–94, prime 95–100). Leave empty to use Intervals.icu HRV/RHR/sleep/form instead |
+| `nightly_hrv_entity` | Home Assistant entity holding last night's average HRV in ms. Default: `sensor.garmin_connect_hrv_last_night_average`. Only used in the Garmin path, to report last-night HRV alongside the weekly average. Leave empty to omit it |
 
 ---
 
