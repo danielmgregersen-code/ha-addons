@@ -39,6 +39,8 @@ Every morning the coach checks your latest wellness metrics against your configu
 
 The Intervals.icu metrics are the supporting detail that explain the score. HRV is judged primarily on a **7-day running average** (which filters out day-to-day noise) while still noting today's single-day reading and flagging it when it is far from your normal range. A suppressed running-average HRV, resting HR above your range, form score (TSB) below −20, or a sleep score below 60 each independently raises an alert too. On any alert the coach tells you which signal is concerning, looks at what is planned for the day, and suggests a specific adjustment (e.g. replace intervals with 60 minutes of easy Z2, or shorten the session by 30%). If no readiness entity is set or it can't be read, the check falls back to the HRV/RHR/sleep/form logic.
 
+The check runs from 07:00 onward. When a readiness entity is configured, it waits for that entity to publish a score before running (Garmin often reports `unavailable` for a while after you wake) — but no later than 10:00, after which it runs with whatever data is available.
+
 On normal days the check runs silently and records an `[OK]` entry. Push notifications and banner cards are shown only when an alert fires.
 
 Results are stored in the **❤️ Wellness checks** session (Health tab).

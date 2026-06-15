@@ -319,6 +319,14 @@ async def wellness_check_loop():
             state = _load_json_file(WELLNESS_STATE_FILE, {})
             if state.get("last_date") == today:
                 continue
+            # If a Garmin readiness entity is configured, hold the check until it
+            # publishes a score — it often reads "unavailable" for a while after
+            # waking — but never wait past 10:00, after which we run with whatever
+            # data is available.
+            if agent.readiness_entity and now.hour < 10:
+                if not await asyncio.to_thread(agent.training_readiness_available):
+                    print(f"Wellness check deferred for {today}: training readiness not ready yet.", flush=True)
+                    continue
             print(f"Running wellness check for {today}", flush=True)
             message, is_alert, usage = agent.wellness_check()
             accumulate_tokens(usage)

@@ -610,6 +610,14 @@ class TrainingAgent:
             "attributes": state.get("attributes", {}),
         }
 
+    def training_readiness_available(self) -> bool:
+        """True only when a readiness entity is configured AND currently returns
+        a numeric score. Used to defer the morning check until Garmin has
+        published the reading (it often reads 'unavailable' for a while)."""
+        if not self.readiness_entity:
+            return False
+        return self._get_training_readiness().get("available", False)
+
     def _run_tool(self, name: str, args: dict) -> str:
         try:
             if name == "get_recent_activities":
