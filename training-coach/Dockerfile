@@ -14,6 +14,10 @@ RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 # Copy application
 COPY app/ .
 
+# Launch via with-contenv (run.sh) so SUPERVISOR_TOKEN is available at runtime
+COPY run.sh /run.sh
+RUN chmod +x /run.sh
+
 EXPOSE 8000
 
-CMD ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/run.sh"]
