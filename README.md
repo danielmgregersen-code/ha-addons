@@ -41,7 +41,7 @@ Every morning the coach runs a recovery check and, if today's session warrants i
 
 **Without a readiness entity** (leave `training_readiness_entity` empty): the check falls back to your Intervals.icu wellness data. HRV is judged primarily on a **7-day running average** (which filters out day-to-day noise) while still noting today's single-day reading and flagging it when it is far from your normal range. A suppressed running-average HRV, resting HR above your range, form score (TSB) below −20, or a sleep score below 60 each raises an alert, and the coach suggests a specific adjustment (e.g. replace intervals with 60 minutes of easy Z2, or shorten the session by 30%).
 
-The check runs from 07:00 onward. When a readiness entity is configured, it waits for that entity to publish a score before running (Garmin often reports `unavailable` for a while after you wake) — but no later than 10:00, after which it runs with whatever data is available.
+The check runs from 07:00 onward, in your Home Assistant local time. When a readiness entity is configured, it waits for that entity to publish a score before running (Garmin often reports `unavailable` for a while after you wake) — but no later than 10:00, after which it runs with whatever data is available.
 
 On normal days the check runs silently and records an `[OK]` entry. Push notifications and banner cards are shown only when an alert fires.
 
