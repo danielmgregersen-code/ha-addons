@@ -326,8 +326,9 @@ async def wellness_check_loop():
             # waking — but never wait past 10:00, after which we run with whatever
             # data is available.
             if agent.readiness_entity and now.hour < 10:
-                if not await asyncio.to_thread(agent.training_readiness_available):
-                    print(f"Wellness check deferred for {today}: training readiness not ready yet.", flush=True)
+                status = await asyncio.to_thread(agent.readiness_status)
+                if not status.get("available"):
+                    print(f"Wellness check deferred for {today}: {status.get('reason')}", flush=True)
                     continue
             print(f"Running wellness check for {today}", flush=True)
             message, is_alert, usage = agent.wellness_check()
@@ -480,8 +481,26 @@ async def dispatch_chain_alerts():
         print(f"Chain alert: {notif['id']}", flush=True)
 
 
+def _probe_readiness_entity():
+    """One-time startup diagnostic so a failing HA Core API read is visible
+    immediately on boot instead of only as a silent morning deferral."""
+    if not agent.readiness_entity:
+        print("Readiness probe: no training_readiness_entity configured (Intervals path).", flush=True)
+        return
+    token_present = bool(os.getenv("SUPERVISOR_TOKEN"))
+    raw = agent.ha.get_state(agent.readiness_entity)
+    raw_state = raw.get("state") if raw else None
+    status = agent.readiness_status()
+    print(
+        f"Readiness probe: entity={agent.readiness_entity} token_present={token_present} "
+        f"raw_state={raw_state!r} available={status.get('available')} reason={status.get('reason')}",
+        flush=True,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await asyncio.to_thread(_probe_readiness_entity)
     t1 = asyncio.create_task(auto_review_loop())
     t2 = asyncio.create_task(weekly_recap_loop())
     t3 = asyncio.create_task(wellness_check_loop())

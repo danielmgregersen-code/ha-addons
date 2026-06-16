@@ -652,9 +652,11 @@ class TrainingAgent:
         configured, unreachable, or has no numeric score yet."""
         if not self.readiness_entity:
             return {"available": False, "reason": "No training readiness entity configured."}
+        if not self.ha.token:
+            return {"available": False, "reason": "SUPERVISOR_TOKEN is missing — the add-on cannot reach the HA Core API."}
         state = self.ha.get_state(self.readiness_entity)
         if not state:
-            return {"available": False, "reason": "Home Assistant entity unavailable or not reachable."}
+            return {"available": False, "reason": f"Could not read {self.readiness_entity} from the HA Core API (see HA get_state log line for the HTTP status)."}
         attrs = state.get("attributes", {}) or {}
         # The state is the readiness score (e.g. "79"); fall back to the score attribute.
         try:
@@ -698,6 +700,11 @@ class TrainingAgent:
             return round(float(state.get("state")))
         except (TypeError, ValueError):
             return None
+
+    def readiness_status(self) -> dict:
+        """Public accessor for the current readiness read, including the reason
+        when unavailable. Used by the morning loop so it can log WHY it defers."""
+        return self._get_training_readiness()
 
     def training_readiness_available(self) -> bool:
         """True only when a readiness entity is configured AND currently returns

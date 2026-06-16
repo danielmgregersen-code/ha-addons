@@ -17,8 +17,12 @@ class HAClient:
 
     def get_state(self, entity_id: str) -> dict | None:
         """Fetch a single entity's state. Returns a trimmed dict, or None if
-        not configured / unavailable / the request fails."""
-        if not self.token or not entity_id:
+        not configured / unavailable / the request fails. Logs the failure
+        cause so a swallowed 401/404/connection error is diagnosable."""
+        if not self.token:
+            print("HA get_state: SUPERVISOR_TOKEN is not set — cannot reach the HA Core API.", flush=True)
+            return None
+        if not entity_id:
             return None
         headers = {
             "Authorization": f"Bearer {self.token}",
@@ -31,7 +35,12 @@ class HAClient:
                 timeout=10,
             )
             r.raise_for_status()
-        except requests.RequestException:
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "?"
+            print(f"HA get_state({entity_id}) failed: HTTP {status}", flush=True)
+            return None
+        except requests.RequestException as e:
+            print(f"HA get_state({entity_id}) failed: {type(e).__name__}: {e}", flush=True)
             return None
         data = r.json()
         return {

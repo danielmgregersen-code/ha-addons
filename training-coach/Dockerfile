@@ -1,8 +1,9 @@
 ARG BUILD_FROM
 FROM $BUILD_FROM
 
-# Install Python
-RUN apk add --no-cache python3 py3-pip
+# Install Python (tzdata so datetime.now() honors the TZ Supervisor passes,
+# instead of falling back to UTC — the morning check gates on local time)
+RUN apk add --no-cache python3 py3-pip tzdata
 
 WORKDIR /app
 
