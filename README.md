@@ -1,6 +1,6 @@
 # Training Coach — Home Assistant Add-on
 
-An AI-powered cycling coach that lives inside Home Assistant and connects directly to your Intervals.icu training data. Chat with it like a real coach — ask questions, get ride feedback, plan workouts, and have it automatically review rides, recap each week, and flag poor recovery days before you head out.
+An AI-powered cycling coach that lives inside Home Assistant and connects directly to your Intervals.icu training data. Chat with it like a real coach — ask questions, get ride feedback, plan workouts, and have it automatically review rides, recap each week, and flag poor recovery days before you head out. It can read your Garmin training readiness straight from a Home Assistant sensor, and any change it recommends can be applied with one tap.
 
 ---
 
@@ -199,6 +199,18 @@ Paste your athlete ID into `intervals_athlete_id` and your API key into `interva
 
 ---
 
+### Garmin training readiness (optional)
+
+If you wear a Garmin, the add-on can use Garmin's **morning training readiness** as the primary signal for the daily wellness check and the Health tab — it folds sleep, HRV, recovery time, load balance and stress into one 0–100 score. This is optional; leave the entities blank to use Intervals.icu HRV/RHR/sleep/form instead.
+
+1. Install a Garmin Connect integration in Home Assistant that exposes your readiness as a sensor (for example the community **Garmin Connect** integration via HACS). After setup you should see entities like `sensor.garmin_connect_training_readiness` (the 0–100 score) and `sensor.garmin_connect_hrv_last_night_average` (last night's HRV in ms).
+2. Confirm the exact entity IDs in **Developer Tools → States** — names can vary by integration version.
+3. Put them in `training_readiness_entity` and `nightly_hrv_entity` (the defaults already match the entity names above).
+
+The add-on reads these states through Home Assistant's API using the Supervisor token — no extra configuration is needed; it works out of the box once the entities exist. The same access powers push notifications. On boot the add-on log notes only if a configured readiness entity can't be read.
+
+---
+
 ## Configuration
 
 | Setting | Description |
@@ -237,3 +249,4 @@ All conversation history, notifications, and token usage are stored locally on y
 - Raspberry Pi 4 or any aarch64/amd64 device running HA
 - An OpenAI account with API access and a funded balance
 - An Intervals.icu account (free)
+- *Optional:* a Garmin Connect integration exposing a training-readiness sensor, to drive the wellness check from Garmin instead of Intervals.icu data
