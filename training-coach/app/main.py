@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import asyncio
 import threading
 import requests
@@ -343,7 +344,7 @@ async def wellness_check_loop():
                 "timestamp": now.isoformat(),
                 "activity_name": f"Wellness check — {today}",
                 "activity_date": today,
-                "comment": message,
+                "comment": _strip_markers(message),
                 "type": notif_type,
                 "seen": False,
             }
@@ -351,7 +352,7 @@ async def wellness_check_loop():
                 notifications[notif["id"]] = notif
                 save_notifications(notifications)
             if is_alert:
-                preview = message.replace("[ALERT]", "").strip()[:200]
+                preview = _strip_markers(message.replace("[ALERT]", ""))[:200]
                 await send_ha_notification("⚠ Wellness Alert", preview)
             _save_json_file(WELLNESS_STATE_FILE, {"last_date": today}, "could not save wellness state")
             print(f"Wellness check done for {today} (alert={is_alert})", flush=True)
@@ -525,6 +526,41 @@ class ChatResponse(BaseModel):
 class HistoryResponse(BaseModel):
     messages: list
 
+class ResolveProposalRequest(BaseModel):
+    session_id: str
+
+class PostReviewRequest(BaseModel):
+    session_id: str
+    activity_id: str
+    comment: str
+
+
+# Inline accept/reject proposal markers the coach may append to a message
+# (e.g. [[PROPOSE_WORKOUT_CHANGE]] or [[PROPOSE_REVIEW_POST activity_id=123]]).
+# The frontend turns them into Accept/Reject buttons; strip them everywhere else.
+_PROPOSAL_MARKER_RE = re.compile(r"\s*\[\[PROPOSE_[^\]]*\]\]\s*")
+
+
+def _strip_markers(text: str) -> str:
+    if not isinstance(text, str):
+        return text
+    return _PROPOSAL_MARKER_RE.sub("", text).strip()
+
+
+def _resolve_latest_proposal(session_id: str) -> bool:
+    """Strip proposal markers from the most recent assistant message in a session
+    that still carries one, so its Accept/Reject buttons don't reappear on reload.
+    Caller need not hold the lock. Returns True if a message was changed."""
+    with sessions_lock:
+        history = sessions.get(session_id, [])
+        for m in reversed(history):
+            if (isinstance(m, dict) and m.get("role") == "assistant"
+                    and isinstance(m.get("content"), str) and "[[PROPOSE_" in m["content"]):
+                m["content"] = _strip_markers(m["content"])
+                sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
+                return True
+    return False
+
 
 # ── Routes ──
 @app.get("/")
@@ -605,6 +641,36 @@ def get_history(session_id: str):
         and isinstance(m.get("content"), str)
     ]
     return HistoryResponse(messages=displayable)
+
+
+@app.post("/proposals/resolve")
+def resolve_proposal(req: ResolveProposalRequest):
+    """Clear a pending Accept/Reject proposal on the latest message in a session
+    (called when the athlete accepts or rejects an inline suggestion)."""
+    _resolve_latest_proposal(req.session_id)
+    return {"ok": True}
+
+
+@app.post("/reviews/post")
+def post_review(req: PostReviewRequest):
+    """Accept an inline 'post this review' suggestion: write the review as the
+    activity's coach comment on Intervals.icu, then resolve the proposal and
+    append a confirmation to the session."""
+    comment = _strip_markers(req.comment)
+    if not comment:
+        raise HTTPException(status_code=400, detail="Empty review comment.")
+    try:
+        agent.icu.post_activity_comment(req.activity_id, comment)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not post the review to Intervals.icu: {e}")
+    confirmation = "✓ Posted this review as the activity's coach comment on Intervals.icu."
+    _resolve_latest_proposal(req.session_id)
+    with sessions_lock:
+        history = sessions.get(req.session_id, [])
+        history.append({"role": "assistant", "content": confirmation})
+        sessions[req.session_id] = history
+        sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
+    return {"reply": confirmation}
 
 
 @app.delete("/chat/{session_id}")
