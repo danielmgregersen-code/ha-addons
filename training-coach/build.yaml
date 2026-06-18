@@ -1,3 +1,6 @@
+# Pinned to a Python 3.12 base: pydantic-core ships musl cp312 wheels, so pip
+# does not try to compile Rust from source. The floating :latest base moved to
+# Python 3.14 (no prebuilt wheel), which broke the build.
 build_from:
-  aarch64: ghcr.io/home-assistant/aarch64-base:latest
-  amd64: ghcr.io/home-assistant/amd64-base:latest
+  aarch64: ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.23
+  amd64: ghcr.io/home-assistant/amd64-base-python:3.12-alpine3.23

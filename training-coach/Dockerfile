@@ -1,9 +1,11 @@
 ARG BUILD_FROM
 FROM $BUILD_FROM
 
-# Install Python (tzdata so datetime.now() honors the TZ Supervisor passes,
-# instead of falling back to UTC — the morning check gates on local time)
-RUN apk add --no-cache python3 py3-pip tzdata
+# The base-python image already provides Python 3.12 + pip. Only add tzdata so
+# datetime.now() honors the TZ Supervisor passes (the morning check gates on
+# local time). Do NOT apk add python3 here — it would pull Alpine's newer system
+# Python alongside the base one and break dependency wheels.
+RUN apk add --no-cache tzdata
 
 WORKDIR /app
 
