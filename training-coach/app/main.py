@@ -482,20 +482,13 @@ async def dispatch_chain_alerts():
 
 
 def _probe_readiness_entity():
-    """One-time startup diagnostic so a failing HA Core API read is visible
-    immediately on boot instead of only as a silent morning deferral."""
+    """Startup check: warn only if a configured readiness entity can't be read,
+    so a broken HA Core API connection is still visible on boot. Silent on success."""
     if not agent.readiness_entity:
-        print("Readiness probe: no training_readiness_entity configured (Intervals path).", flush=True)
         return
-    token_present = bool(os.getenv("SUPERVISOR_TOKEN"))
-    raw = agent.ha.get_state(agent.readiness_entity)
-    raw_state = raw.get("state") if raw else None
     status = agent.readiness_status()
-    print(
-        f"Readiness probe: entity={agent.readiness_entity} token_present={token_present} "
-        f"raw_state={raw_state!r} available={status.get('available')} reason={status.get('reason')}",
-        flush=True,
-    )
+    if not status.get("available"):
+        print(f"Readiness probe: cannot read {agent.readiness_entity}: {status.get('reason')}", flush=True)
 
 
 @asynccontextmanager
