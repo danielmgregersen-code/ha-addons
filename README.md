@@ -23,6 +23,15 @@ Each mode maintains its own set of sessions in the sidebar, so review conversati
 ### Automatic workout review
 When a new ride syncs to Intervals.icu and you have logged both an RPE and a feel score, the coach detects it within a few minutes and automatically writes a concise review — covering training load, zone distribution, decoupling, key efforts, and one or two concrete takeaways. The review is posted as a description on the activity in Intervals.icu and marked with a coach tick. A notification card appears for errors only; successful reviews go straight to the **⚡ Auto-reviews** session in the Review tab without interrupting you. Tap **More detail** to request a deeper analysis.
 
+When you ask for a detailed review of a specific ride in the **Review** tab, the coach's reply carries inline **Post review** / **Dismiss** buttons — accept to post that detailed write-up as the activity's coach comment on Intervals.icu without leaving the chat.
+
+### Inline accept/reject for recommended changes
+The Health and Review tabs are read-only, but when the coach recommends an action you can apply it with one tap:
+- **Workout changes** — when the wellness check or a Health chat recommends adjusting today's session (e.g. swap intervals for easy Z2), the message shows an **Apply change** button. Accepting hands the recommendation to the Planning coach, which updates the workout on your Intervals.icu calendar.
+- **Detailed reviews** — see *Automatic workout review* above; detailed reviews can be posted inline.
+
+Both come with a **Dismiss** button, and the buttons clear once you've acted on them.
+
 ### Weekly recap (every Monday)
 Every Monday morning the coach automatically generates a structured training recap for the past week:
 
