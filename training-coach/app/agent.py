@@ -17,6 +17,12 @@ def _readiness_band(score: float) -> str:
     return "prime"
 
 
+def _fmt_feedback(value):
+    """Render Garmin's enum-style feedback (e.g. VERY_GOOD,
+    ENERGIZED_BY_GOOD_SLEEP) as lowercase words; pass non-strings through."""
+    return value.replace("_", " ").lower() if isinstance(value, str) else value
+
+
 TOOLS = [
     {
         "type": "function",
@@ -393,8 +399,8 @@ Your role is to interpret these signals and advise whether the current training 
 Today's date: {today}
 
 Interpretation guidelines:
-- Training readiness: get_training_readiness returns a 0–100 score (higher is better) and its band — poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). It already folds together sleep, HRV status, recovery time, acute load and stress. Lead with it.
-- Factor breakdown: the same call returns the factors that explain the score. Sleep and recovery are the two main ones: sleep_score + sleep_feedback, and recovery_time (in MINUTES until full recovery) + recovery_feedback. Also returned: level and feedback text, HRV — both hrv_weekly_avg (Garmin's 7-day average) and hrv_last_night (last night, ms) — with hrv_feedback, acute_load + load_balance_feedback (acute:chronic load), and stress_feedback. The *_feedback labels (GOOD, VERY_GOOD, POOR, …) are the robust signal — lean on them rather than guessing units.
+- Training readiness: get_training_readiness returns a 0–100 score (higher is better) and its band — poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). It already folds together sleep, HRV status, recovery time, acute load and stress. Lead with the score; use the band only to judge — don't restate it as a label, the score already conveys it.
+- Factor breakdown: the same call returns the factors that explain the score. Sleep and recovery are the two main ones: sleep_score + sleep_feedback, and recovery_time (recovery_hours / recovery_time give hours and minutes until full recovery) + recovery_feedback. Also returned: feedback text, HRV — both hrv_weekly_avg (Garmin's 7-day average) and hrv_last_night (last night, ms) — with hrv_feedback, acute_load + load_balance_feedback (acute:chronic load), and stress_feedback. The *_feedback labels (good, very good, poor, …) are the robust signal — lean on them rather than guessing units.
 - If get_training_readiness returns available=false, say plainly that today's readiness could not be read, rather than inventing numbers.
 - To advise on whether to adjust today's session, call get_planned_workouts(days_ahead=1) and weigh the readiness band against how hard the planned session is (a low band matters most on an interval/hard day).
 
@@ -586,7 +592,7 @@ Today's date: {today}
 
 PRIMARY SIGNAL — Garmin training readiness:
 - get_training_readiness returns today's readiness score (0–100, higher is better) and its band: poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). The score already folds together sleep, HRV status, recovery time, acute load and stress.
-- It also returns the factor breakdown that explains the score — use these to say WHY readiness is where it is. Sleep and recovery are the two main factors: sleep_score + sleep_feedback, and recovery_time (in MINUTES until full recovery) + recovery_feedback. The remaining factors are level (e.g. HIGH) and feedback text, HRV — both hrv_weekly_avg (Garmin's 7-day average) and hrv_last_night (last night's average, in ms) — with hrv_feedback, acute_load + load_balance_feedback (acute:chronic load), and stress_feedback. The *_feedback labels (e.g. GOOD, VERY_GOOD, POOR) are the robust signal — lean on them rather than guessing units.
+- It also returns the factor breakdown that explains the score — use these to say WHY readiness is where it is. Sleep and recovery are the two main factors: sleep_score + sleep_feedback, and recovery_time (recovery_hours / recovery_time give hours and minutes until full recovery) + recovery_feedback. The remaining factors are feedback text, HRV — both hrv_weekly_avg (Garmin's 7-day average) and hrv_last_night (last night's average, in ms) — with hrv_feedback, acute_load + load_balance_feedback (acute:chronic load), and stress_feedback. The *_feedback labels (e.g. good, very good, poor) are the robust signal — lean on them rather than guessing units.
 
 Alert logic — the readiness band drives the alert, conditioned on today's planned workout:
 - poor (≤24): ALWAYS an alert, no matter what is planned (or if nothing is planned). The body needs rest.
@@ -605,7 +611,7 @@ IMPORTANT — begin your response with exactly one of these tokens on its own li
 - `[OK]` otherwise
 
 After the token, write 3-6 sentences:
-- Lead with the readiness score, level and band; then always state the two main factors — last night's sleep score and the recovery time in minutes — followed by both HRV figures (weekly average and last night, ms), load balance and stress
+- Lead with the readiness score (use the band only to decide the alert — do not print the band or level as a label, the score already conveys it); then always state the two main factors — last night's sleep score and the recovery time in hours (and minutes) — followed by both HRV figures (weekly average and last night, ms), load balance and stress
 - State which signals are concerning (if ALERT) or reassuring (if OK)
 - If ALERT and a structured workout is planned today: suggest a specific adjustment (e.g. replace intervals with 60 min easy Z2, or shorten duration by 30%)
 - If ALERT and no workout planned: advise rest or very light movement
@@ -679,23 +685,28 @@ class TrainingAgent:
                 score = float(attrs.get("score"))
             except (TypeError, ValueError):
                 return {"available": False, "reason": f"Readiness score not available yet (state={state.get('state')!r})."}
+        recovery_time = attrs.get("recoveryTime")
+        recovery_hours = (
+            round(recovery_time / 60, 1)
+            if isinstance(recovery_time, (int, float))
+            else None
+        )
         result = {
             "available": True,
             "score": round(score),
             "band": _readiness_band(score),
-            "level": attrs.get("level"),
-            "feedback": attrs.get("feedbackShort"),
-            "feedback_detail": attrs.get("feedbackLong"),
+            "feedback": _fmt_feedback(attrs.get("feedbackShort")),
             "sleep_score": attrs.get("sleepScore"),
-            "sleep_feedback": attrs.get("sleepScoreFactorFeedback"),
+            "sleep_feedback": _fmt_feedback(attrs.get("sleepScoreFactorFeedback")),
             "hrv_weekly_avg": attrs.get("hrvWeeklyAverage"),
             "hrv_last_night": self._get_nightly_hrv(),
-            "hrv_feedback": attrs.get("hrvFactorFeedback"),
-            "recovery_time": attrs.get("recoveryTime"),
-            "recovery_feedback": attrs.get("recoveryTimeFactorFeedback"),
+            "hrv_feedback": _fmt_feedback(attrs.get("hrvFactorFeedback")),
+            "recovery_time": recovery_time,
+            "recovery_hours": recovery_hours,
+            "recovery_feedback": _fmt_feedback(attrs.get("recoveryTimeFactorFeedback")),
             "acute_load": attrs.get("acuteLoad"),
-            "load_balance_feedback": attrs.get("acwrFactorFeedback"),
-            "stress_feedback": attrs.get("stressHistoryFactorFeedback"),
+            "load_balance_feedback": _fmt_feedback(attrs.get("acwrFactorFeedback")),
+            "stress_feedback": _fmt_feedback(attrs.get("stressHistoryFactorFeedback")),
             "calendar_date": attrs.get("calendarDate"),
         }
         return result
