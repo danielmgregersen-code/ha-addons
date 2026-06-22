@@ -1,6 +1,6 @@
 # Training Coach — Home Assistant Add-on
 
-An AI-powered cycling coach that lives inside Home Assistant and connects directly to your Intervals.icu training data. Chat with it like a real coach — ask questions, get ride feedback, plan workouts, and have it automatically review rides, recap each week, and flag poor recovery days before you head out.
+An AI-powered cycling coach that lives inside Home Assistant and connects directly to your Intervals.icu training data. Chat with it like a real coach — ask questions, get ride feedback, plan workouts, and have it automatically review rides, recap each week, and flag poor recovery days before you head out. It can read your Garmin training readiness straight from a Home Assistant sensor, and any change it recommends can be applied with one tap.
 
 ---
 
@@ -46,7 +46,7 @@ The recap is stored in the **📊 Weekly recaps** session (Review tab) and a not
 ### Daily wellness check (every morning)
 Every morning the coach runs a recovery check and, if today's session warrants it, suggests an adjustment.
 
-**With a Garmin training readiness entity** (`training_readiness_entity`, the default): the whole check is driven by that single 0–100 score, which already folds together sleep, HRV status, recovery time, acute load and stress. It is classified into Garmin's bands (poor 1–24, low 25–49, moderate 50–74, high 75–94, prime 95–100), and the coach explains it using the factor breakdown carried in the entity. Sleep and recovery are reported as the two headline factors — last night's sleep score and the recovery time in minutes — followed by HRV (both Garmin's weekly average and last night's average in ms, the latter pulled from `nightly_hrv_entity`), load balance and stress, each with Garmin's own GOOD/VERY_GOOD/… feedback. The alert is conditioned on what's planned: a **poor** score always alerts, a **low** score alerts only when a hard/interval session is planned (low on an easy or rest day is fine), and **moderate or better** does not alert on its own. Intervals.icu is used only to look up today's planned workout. If readiness can't be read that morning it records a quiet `[OK]` note rather than alerting.
+**With a Garmin training readiness entity** (`training_readiness_entity`, the default): the whole check is driven by that single 0–100 score, which already folds together sleep, HRV status, recovery time, acute load and stress. It is classified into Garmin's bands (poor 1–24, low 25–49, moderate 50–74, high 75–94, prime 95–100), and the coach explains it using the factor breakdown carried in the entity. Sleep and recovery are reported as the two headline factors — last night's sleep score and the recovery time in hours (and minutes) — followed by HRV (both Garmin's weekly average and last night's average in ms, the latter pulled from `nightly_hrv_entity`), load balance and stress, each with Garmin's own feedback (e.g. good/very good). The alert is conditioned on what's planned: a **poor** score always alerts, a **low** score alerts only when a hard/interval session is planned (low on an easy or rest day is fine), and **moderate or better** does not alert on its own. Intervals.icu is used only to look up today's planned workout. If readiness can't be read that morning it records a quiet `[OK]` note rather than alerting.
 
 **Without a readiness entity** (leave `training_readiness_entity` empty): the check falls back to your Intervals.icu wellness data. HRV is judged primarily on a **7-day running average** (which filters out day-to-day noise) while still noting today's single-day reading and flagging it when it is far from your normal range. A suppressed running-average HRV, resting HR above your range, form score (TSB) below −20, or a sleep score below 60 each raises an alert, and the coach suggests a specific adjustment (e.g. replace intervals with 60 minutes of easy Z2, or shorten the session by 30%).
 
@@ -199,6 +199,18 @@ Paste your athlete ID into `intervals_athlete_id` and your API key into `interva
 
 ---
 
+### Garmin training readiness (optional)
+
+If you wear a Garmin, the add-on can use Garmin's **morning training readiness** as the primary signal for the daily wellness check and the Health tab — it folds sleep, HRV, recovery time, load balance and stress into one 0–100 score. This is optional; leave the entities blank to use Intervals.icu HRV/RHR/sleep/form instead.
+
+1. Install a Garmin Connect integration in Home Assistant that exposes your readiness as a sensor (for example the community **Garmin Connect** integration via HACS). After setup you should see entities like `sensor.garmin_connect_training_readiness` (the 0–100 score) and `sensor.garmin_connect_hrv_last_night_average` (last night's HRV in ms).
+2. Confirm the exact entity IDs in **Developer Tools → States** — names can vary by integration version.
+3. Put them in `training_readiness_entity` and `nightly_hrv_entity` (the defaults already match the entity names above).
+
+The add-on reads these states through Home Assistant's API using the Supervisor token — no extra configuration is needed; it works out of the box once the entities exist. The same access powers push notifications. On boot the add-on log notes only if a configured readiness entity can't be read.
+
+---
+
 ## Configuration
 
 | Setting | Description |
@@ -237,3 +249,4 @@ All conversation history, notifications, and token usage are stored locally on y
 - Raspberry Pi 4 or any aarch64/amd64 device running HA
 - An OpenAI account with API access and a funded balance
 - An Intervals.icu account (free)
+- *Optional:* a Garmin Connect integration exposing a training-readiness sensor, to drive the wellness check from Garmin instead of Intervals.icu data
