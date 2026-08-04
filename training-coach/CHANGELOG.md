@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.1
+
+- Fixed runs being analysed against your **cycling** FTP. The coach now reads
+  Intervals.icu's per-sport settings and uses each activity's own thresholds.
+- The same bug affected **LTHR and max HR**, so run heart-rate zones were wrong
+  too — also fixed.
+- If a sport has no thresholds configured, the coach now says so instead of
+  quietly borrowing another sport's numbers.
+
 ## 1.4.0
 
 - Moved to OpenAI's Responses API. Newer reasoning models such as `gpt-5.6` now

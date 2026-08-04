@@ -290,6 +290,13 @@ class TestToolSchemas(unittest.TestCase):
             self.assertIs(t.get("strict"), False, f"{t['name']} must set strict=False")
             self.assertNotIn("function", t, "nested Chat Completions shape left behind")
 
+    def test_get_coach_ticks_takes_no_sport_argument(self):
+        """Deliberate: it returns every sport's thresholds and the model matches on
+        `sports`. A `sport` parameter would fail silently toward cycling whenever
+        the model forgot to pass it — which is the bug this design removes."""
+        tool = next(t for t in TOOLS if t["name"] == "get_coach_ticks")
+        self.assertEqual(tool["parameters"]["properties"], {})
+
     def test_every_referenced_tool_name_exists(self):
         names = {t["name"] for t in TOOLS}
         self.assertEqual(len(names), len(TOOLS), "duplicate tool name")

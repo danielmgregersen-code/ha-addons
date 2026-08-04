@@ -128,9 +128,15 @@ TOOLS = [
         "strict": False,
         "name": "get_coach_ticks",
         "description": (
-            "Fetch the available coach tick options for this athlete. Also returns the athlete's "
-            "user-configured ftp, lthr and max_hr — always use these values when interpreting "
-            "power percentages or HR zones, not the eFTP estimated from activity data."
+            "Fetch the available coach tick options for this athlete, plus their user-configured "
+            "threshold settings for EVERY sport in sport_settings. Each entry has a `sports` list "
+            "of the sport types it covers (e.g. [\"Ride\",\"VirtualRide\"] or [\"Run\",\"TrailRun\"]) "
+            "alongside the ftp, lthr and max_hr for those sports. Match the activity's `type` "
+            "against `sports` and use only that entry's numbers — run and ride thresholds differ, "
+            "and running power is not comparable to cycling power. Always prefer these configured "
+            "values over the eFTP estimated from activity data. A null value means that threshold "
+            "is not configured for that sport; if no entry covers the sport at all (see "
+            "sports_configured), say so rather than substituting another sport's numbers."
         ),
         "parameters": {"type": "object", "properties": {}},
     },
@@ -328,7 +334,8 @@ Metric reference:
 - group_ride flag indicates the activity matched the group ride keywords
 - Sweet spot ~84–97% FTP overlaps Z3 and Z4 — never count it as a separate zone
 
-FTP: always use the user-configured ftp from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
+FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
+Pick the sport_settings entry whose `sports` list contains this activity's `type` — never judge a run against ride FTP or ride LTHR. If no entry covers that sport, or the value is null, say the threshold is not configured rather than using another sport's.
 
 For MATCHED workouts (compliance > 0): focus on interval execution — did efforts hit targets, how consistent were the reps, power/HR per interval. Cover zone distribution briefly.
 For UNMATCHED rides: equal weight to interval efforts and zone distribution.
@@ -358,7 +365,8 @@ Metric reference:
 - Sweet spot (~84–97% FTP) overlaps Z3 and Z4 — it is NOT a separate zone. Never list it on top of Z3/Z4 totals
 - compliance > 0 means the ride matched a planned workout — call get_planned_workout(paired_event_id) to compare actual vs planned
 
-FTP: always use the user-configured ftp from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
+FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
+Pick the sport_settings entry whose `sports` list contains this activity's `type` — never judge a run against ride FTP or ride LTHR. If no entry covers that sport, or the value is null, say the threshold is not configured rather than using another sport's.
 
 Analysis rules:
 - Always fetch relevant data before commenting — never assume what a workout looks like
@@ -555,7 +563,7 @@ Structure your recap as follows:
 **Coming week:** 1-2 sentence recommendation based on this week's load and wellness trend.
 
 Keep the recap concise — under 400 words. Write in a direct, coach-to-athlete tone.
-FTP: always use the user-configured ftp from get_coach_ticks, not eFTP.
+FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP, and pick the sport_settings entry matching each activity's type — ride and run thresholds differ.
 feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better.
 """
 
@@ -1116,10 +1124,15 @@ class TrainingAgent:
             if paired_event_id else
             "Fetch the activity intervals with get_activity_intervals for a full breakdown."
         )
+        # Name the sport explicitly: this path knows it server-side, so the model
+        # never has to infer it to pick the right thresholds.
+        sport = activity.get("type") or "unknown"
         prompt = (
-            f"A new ride was just uploaded. {planned_instruction} "
-            f"Also fetch coach ticks (get_coach_ticks) so you know the athlete's configured FTP, "
-            f"then post a brief coach note on the activity with the most appropriate tick "
+            f"A new {sport} activity was just uploaded. {planned_instruction} "
+            f"Also fetch coach ticks (get_coach_ticks) so you know the athlete's configured "
+            f"thresholds, and use the sport_settings entry whose `sports` list contains "
+            f"\"{sport}\" — not the Ride entry — when interpreting power or HR. "
+            f"Then post a brief coach note on the activity with the most appropriate tick "
             f"(skip tick if list is empty, but always post the comment). "
             f"The note should be 5-10 sentences covering overall execution, standout metrics "
             f"(power consistency, decoupling, HR drift, or planned vs actual), RPE/feel, and "

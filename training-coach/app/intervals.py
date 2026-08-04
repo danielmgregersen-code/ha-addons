@@ -37,36 +37,56 @@ class IntervalsClient:
         {"id": 5, "text": "Amazing"},
     ]
 
+    # Always emitted per sport, null when the athlete hasn't set them, so the caller
+    # can tell "run FTP not configured" apart from "run FTP is 250W".
+    _CORE_THRESHOLD_FIELDS = ("ftp", "lthr", "max_hr")
+    # Emitted only when actually present upstream, so a field Intervals.icu doesn't
+    # return simply never appears rather than adding a null to every entry.
+    _OPTIONAL_THRESHOLD_FIELDS = ("threshold_pace", "pace_units")
+
     def get_athlete(self):
-        """Fetch athlete profile including available coach_ticks and sport settings.
-        If no ticks are configured, creates the default set automatically."""
+        """Fetch athlete profile: coach_ticks plus per-sport threshold settings.
+
+        Returns EVERY sport's settings and never collapses to one sport — the caller
+        matches an activity's `type` against each entry's `sports` list. Collapsing to
+        the Ride entry is what made run reviews judge runs against cycling FTP/LTHR.
+        Deliberately exposes no top-level ftp/lthr/max_hr: a bare ftp is the cheapest
+        value to grab and is silently wrong for anything that isn't a ride.
+
+        If no ticks are configured, creates the default set automatically.
+        """
         data = self._get(f"/athlete/{self.athlete_id}")
         ticks = data.get("coach_ticks", [])
         if not ticks:
             self._ensure_default_coach_ticks()
             ticks = self.DEFAULT_COACH_TICKS
 
-        # Extract user-configured FTP and LTHR from sport settings (prefer Ride)
-        ftp = None
-        lthr = None
-        max_hr = None
-        sport_settings = data.get("sportSettings") or []
-        # Prefer the Ride entry; fall back to the first entry with an FTP set
-        ride_settings = next(
-            (s for s in sport_settings if "Ride" in (s.get("types") or [])), None
-        ) or next((s for s in sport_settings if s.get("ftp")), None)
-        if ride_settings:
-            ftp = ride_settings.get("ftp")
-            lthr = ride_settings.get("lthr")
-            max_hr = ride_settings.get("max_hr")
+        sport_settings = []
+        covered = set()
+        for s in data.get("sportSettings") or []:
+            sports = list(s.get("types") or [])
+            # `sports`, not `types`: "type" already means the sport on an activity and
+            # WORK/RECOVERY on an interval, so a third meaning would be ambiguous.
+            entry = {"sports": sports}
+            for field in self._CORE_THRESHOLD_FIELDS:
+                entry[field] = s.get(field)
+            for field in self._OPTIONAL_THRESHOLD_FIELDS:
+                value = s.get(field)
+                if value not in (None, ""):
+                    entry[field] = value
+            sport_settings.append(entry)
+            covered.update(sports)
 
         return {
             "id": data.get("id"),
             "name": data.get("name"),
             "coach_ticks": ticks,
-            "ftp": ftp,           # user-configured FTP (watts) — use this, not eFTP
-            "lthr": lthr,         # user-configured lactate threshold HR
-            "max_hr": max_hr,     # user-configured max HR
+            # One entry per sport group. Match an activity's `type` ("Run",
+            # "VirtualRide", …) against `sports` and use only that entry's numbers.
+            "sport_settings": sport_settings,
+            # Flattened union — lets the caller see at a glance that a sport has no
+            # settings at all, which is different from having them unset.
+            "sports_configured": sorted(covered),
         }
 
     def _ensure_default_coach_ticks(self):
