@@ -664,6 +664,49 @@ class TrainingAgent:
 
         self._prompt_cache: dict = {}  # "mode:hash" → prompt string
 
+        # Models that reject function tools unless reasoning is switched off on
+        # /v1/chat/completions. Learned at runtime — see _create_completion.
+        self._no_reasoning_models: set[str] = set()
+
+    def _create_completion(self, **kwargs):
+        """Call chat.completions, working around models that refuse function
+        tools while reasoning is on.
+
+        Newer reasoning models (gpt-5.6 and up) default to a non-zero
+        reasoning_effort and reject tool calls on /v1/chat/completions with:
+
+            Function tools with reasoning_effort are not supported for <model>
+            in /v1/chat/completions. To use function tools, use /v1/responses
+            or set reasoning_effort to 'none'.
+
+        We can't hardcode which models do this — the model name is free text in
+        the add-on config — so the first such failure is detected, remembered,
+        and the call retried with reasoning disabled. Later calls for that model
+        send it upfront. Models that accept tools normally are never sent the
+        parameter, so older ones (gpt-4o, which rejects it) keep working.
+        """
+        model = kwargs.get("model")
+        if model in self._no_reasoning_models:
+            kwargs["reasoning_effort"] = "none"
+        try:
+            return self.openai.chat.completions.create(**kwargs)
+        except Exception as e:
+            msg = str(e)
+            if (
+                kwargs.get("reasoning_effort") == "none"
+                or "reasoning_effort" not in msg
+                or "tools" not in msg
+            ):
+                raise
+            print(
+                f"Model {model} rejects function tools with reasoning enabled — "
+                f"retrying with reasoning_effort='none'.",
+                flush=True,
+            )
+            self._no_reasoning_models.add(model)
+            kwargs["reasoning_effort"] = "none"
+            return self.openai.chat.completions.create(**kwargs)
+
     def _get_training_readiness(self) -> dict:
         """Read the Garmin training-readiness entity from Home Assistant and
         surface its score, band, and the recovery factor breakdown carried in
@@ -970,7 +1013,7 @@ class TrainingAgent:
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         max_iterations = 25
         for _ in range(max_iterations):
-            response = self.openai.chat.completions.create(
+            response = self._create_completion(
                 model=self.chat_model,
                 messages=messages,
                 tools=tools,
@@ -1047,7 +1090,7 @@ class TrainingAgent:
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         max_iterations = 15
         for _ in range(max_iterations):
-            response = self.openai.chat.completions.create(
+            response = self._create_completion(
                 model=self.auto_review_model,
                 messages=messages,
                 tools=TOOLS,
@@ -1111,7 +1154,7 @@ class TrainingAgent:
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         max_iterations = 20
         for _ in range(max_iterations):
-            response = self.openai.chat.completions.create(
+            response = self._create_completion(
                 model=self.auto_review_model,
                 messages=messages,
                 tools=recap_tools,
@@ -1172,7 +1215,7 @@ class TrainingAgent:
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         max_iterations = 10
         for _ in range(max_iterations):
-            response = self.openai.chat.completions.create(
+            response = self._create_completion(
                 model=self.auto_review_model,
                 messages=messages,
                 tools=wellness_tools,

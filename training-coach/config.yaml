@@ -1,6 +1,6 @@
 name: "Training Coach"
 description: "AI coaching agent connected to your Intervals.icu training data."
-version: "1.3.2"
+version: "1.3.3"
 slug: "training_coach"
 init: false
 arch:
