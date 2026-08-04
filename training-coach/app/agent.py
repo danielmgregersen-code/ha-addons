@@ -23,253 +23,252 @@ def _fmt_feedback(value):
     return value.replace("_", " ").lower() if isinstance(value, str) else value
 
 
+# Tool schemas use the flat /v1/responses shape: name/description/parameters sit
+# directly on the tool, not nested under a "function" key.
+# strict=False is explicit and load-bearing — /v1/responses defaults it to TRUE,
+# which would reject every schema here (no additionalProperties:false, partial
+# `required` arrays, and JSON-Schema `default` keywords).
 TOOLS = [
     {
         "type": "function",
-        "function": {
-            "name": "get_recent_activities",
-            "description": (
-                "Fetch the athlete's recent activities from Intervals.icu. "
-                "Choose days_back based on what is actually needed — use the minimum: "
-                "3-5 for a single recent workout, 7-10 for a weekly review, "
-                "28 for block or load trend analysis. Never fetch more than needed."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "days_back": {
-                        "type": "integer",
-                        "description": "How many days back to fetch. Use minimum needed: 3-5 (single workout), 7-10 (weekly), 28 (block/trend). Capped by server config.",
-                        "default": 7,
-                    }
-                },
+        "strict": False,
+        "name": "get_recent_activities",
+        "description": (
+            "Fetch the athlete's recent activities from Intervals.icu. "
+            "Choose days_back based on what is actually needed — use the minimum: "
+            "3-5 for a single recent workout, 7-10 for a weekly review, "
+            "28 for block or load trend analysis. Never fetch more than needed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "days_back": {
+                    "type": "integer",
+                    "description": "How many days back to fetch. Use minimum needed: 3-5 (single workout), 7-10 (weekly), 28 (block/trend). Capped by server config.",
+                    "default": 7,
+                }
             },
         },
     },
     {
         "type": "function",
-        "function": {
-            "name": "get_activity_intervals",
-            "description": (
-                "Fetch detailed interval/lap breakdown for a specific activity. "
-                "Use this when the athlete asks how their intervals went, whether they hit targets, "
-                "how work vs rest periods compared, or for any deep analysis of a single session. "
-                "Requires an activity_id — fetch recent activities first if you don't have it."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "activity_id": {
-                        "type": "string",
-                        "description": "The Intervals.icu activity ID.",
-                    }
-                },
-                "required": ["activity_id"],
+        "strict": False,
+        "name": "get_activity_intervals",
+        "description": (
+            "Fetch detailed interval/lap breakdown for a specific activity. "
+            "Use this when the athlete asks how their intervals went, whether they hit targets, "
+            "how work vs rest periods compared, or for any deep analysis of a single session. "
+            "Requires an activity_id — fetch recent activities first if you don't have it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "activity_id": {
+                    "type": "string",
+                    "description": "The Intervals.icu activity ID.",
+                }
+            },
+            "required": ["activity_id"],
+        },
+    },
+    {
+        "type": "function",
+        "strict": False,
+        "name": "get_wellness",
+        "description": "Fetch the athlete's wellness data (HRV, resting HR, sleep, fatigue, form) from Intervals.icu.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "days_back": {"type": "integer", "default": 14}
             },
         },
     },
     {
         "type": "function",
-        "function": {
-            "name": "get_wellness",
-            "description": "Fetch the athlete's wellness data (HRV, resting HR, sleep, fatigue, form) from Intervals.icu.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "days_back": {"type": "integer", "default": 14}
-                },
+        "strict": False,
+        "name": "get_training_readiness",
+        "description": "Fetch the athlete's Garmin morning training readiness (0–100, higher is better) from Home Assistant, with its band label (poor/low/moderate/high/prime). Returns available=false if the entity is not configured or unavailable.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "type": "function",
+        "strict": False,
+        "name": "get_planned_workouts",
+        "description": "Fetch upcoming planned workouts from the athlete's Intervals.icu calendar.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "days_ahead": {"type": "integer", "default": 35}
             },
         },
     },
     {
         "type": "function",
-        "function": {
-            "name": "get_training_readiness",
-            "description": "Fetch the athlete's Garmin morning training readiness (0–100, higher is better) from Home Assistant, with its band label (poor/low/moderate/high/prime). Returns available=false if the entity is not configured or unavailable.",
-            "parameters": {"type": "object", "properties": {}},
+        "strict": False,
+        "name": "get_planned_workout",
+        "description": (
+            "Fetch a single planned workout from the athlete's calendar by event ID. "
+            "Use this to compare what was planned against what was actually completed. "
+            "The paired_event_id on a completed activity is the event ID to pass here. "
+            "The description field contains the full workout structure."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {
+                    "type": "integer",
+                    "description": "The calendar event ID (use paired_event_id from the completed activity).",
+                }
+            },
+            "required": ["event_id"],
         },
     },
     {
         "type": "function",
-        "function": {
-            "name": "get_planned_workouts",
-            "description": "Fetch upcoming planned workouts from the athlete's Intervals.icu calendar.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "days_ahead": {"type": "integer", "default": 35}
+        "strict": False,
+        "name": "get_coach_ticks",
+        "description": (
+            "Fetch the available coach tick options for this athlete, plus their user-configured "
+            "threshold settings for EVERY sport in sport_settings. Each entry has a `sports` list "
+            "of the sport types it covers (e.g. [\"Ride\",\"VirtualRide\"] or [\"Run\",\"TrailRun\"]) "
+            "alongside the ftp, lthr and max_hr for those sports. Match the activity's `type` "
+            "against `sports` and use only that entry's numbers — run and ride thresholds differ, "
+            "and running power is not comparable to cycling power. Always prefer these configured "
+            "values over the eFTP estimated from activity data. A null value means that threshold "
+            "is not configured for that sport; if no entry covers the sport at all (see "
+            "sports_configured), fall back to an entry flagged covers_other_sports if one "
+            "exists, and otherwise say the thresholds are not configured rather than "
+            "substituting another sport's numbers."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "type": "function",
+        "strict": False,
+        "name": "post_activity_comment",
+        "description": (
+            "Post a coach comment on a completed activity and mark it as coach-reviewed with a tick. "
+            "Always fetch coach ticks first to pick the most appropriate tick_id. "
+            "The comment is written to the activity description field."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "activity_id": {"type": "string"},
+                "comment": {"type": "string"},
+                "coach_tick_id": {
+                    "type": "integer",
+                    "description": "ID of the coach tick to set. Fetch available ticks first.",
                 },
+            },
+            "required": ["activity_id", "comment"],
+        },
+    },
+    {
+        "type": "function",
+        "strict": False,
+        "name": "create_planned_workout",
+        "description": "Create a planned workout on the athlete's Intervals.icu calendar.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "YYYY-MM-DD"},
+                "name": {"type": "string"},
+                "description": {"type": "string"},
+                "sport_type": {"type": "string", "default": "Ride"},
+                "planned_duration_seconds": {"type": "integer"},
+                "planned_tss": {"type": "integer"},
+            },
+            "required": ["date", "name", "description"],
+        },
+    },
+    {
+        "type": "function",
+        "strict": False,
+        "name": "update_planned_workout",
+        "description": "Update/edit an existing planned workout on the athlete's Intervals.icu calendar.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string"},
+                "name": {"type": "string"},
+                "description": {"type": "string"},
+                "date": {"type": "string", "description": "YYYY-MM-DD"},
+                "sport_type": {"type": "string"},
+                "planned_duration_seconds": {"type": "integer"},
+                "planned_tss": {"type": "integer"},
+                "category": {"type": "string", "description": "WORKOUT, RACE_A, RACE_B, RACE_C etc."},
+            },
+            "required": ["event_id"],
+        },
+    },
+    {
+        "type": "function",
+        "strict": False,
+        "name": "get_upcoming_races",
+        "description": (
+            "Fetch upcoming A-priority races from the athlete's Intervals.icu calendar. "
+            "Call this when planning a week or block to check whether a race is approaching "
+            "and determine the correct training phase."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "days_ahead": {
+                    "type": "integer",
+                    "description": "How many days ahead to look. Default 120.",
+                    "default": 120,
+                }
             },
         },
     },
     {
         "type": "function",
-        "function": {
-            "name": "get_planned_workout",
-            "description": (
-                "Fetch a single planned workout from the athlete's calendar by event ID. "
-                "Use this to compare what was planned against what was actually completed. "
-                "The paired_event_id on a completed activity is the event ID to pass here. "
-                "The description field contains the full workout structure."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "event_id": {
-                        "type": "integer",
-                        "description": "The calendar event ID (use paired_event_id from the completed activity).",
-                    }
-                },
-                "required": ["event_id"],
+        "strict": False,
+        "name": "get_weekly_note",
+        "description": (
+            "Fetch the weekly planning note from Monday of a given week. "
+            "Always check this before planning or reviewing a week — it contains the overall intent and focus for that week."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "monday_date": {"type": "string", "description": "Date of Monday in YYYY-MM-DD format."}
             },
+            "required": ["monday_date"],
         },
     },
     {
         "type": "function",
-        "function": {
-            "name": "get_coach_ticks",
-            "description": (
-                "Fetch the available coach tick options for this athlete. Also returns the athlete's "
-                "user-configured ftp, lthr and max_hr — always use these values when interpreting "
-                "power percentages or HR zones, not the eFTP estimated from activity data."
-            ),
-            "parameters": {"type": "object", "properties": {}},
+        "strict": False,
+        "name": "write_weekly_note",
+        "description": (
+            "Create or update the weekly planning note on Monday of a given week. "
+            "Write one when none exists, or update when the plan changes. "
+            "Include: block week number, weekly focus, planned sessions with targets, and expected TSS."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "monday_date": {"type": "string", "description": "YYYY-MM-DD of the Monday."},
+                "name": {"type": "string", "description": "Short title e.g. 'Week 2 — Progressive Overload'"},
+                "content": {"type": "string", "description": "Full weekly plan content."},
+                "event_id": {"type": "integer", "description": "Existing event ID if updating rather than creating."},
+            },
+            "required": ["monday_date", "name", "content"],
         },
     },
     {
         "type": "function",
-        "function": {
-            "name": "post_activity_comment",
-            "description": (
-                "Post a coach comment on a completed activity and mark it as coach-reviewed with a tick. "
-                "Always fetch coach ticks first to pick the most appropriate tick_id. "
-                "The comment is written to the activity description field."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "activity_id": {"type": "string"},
-                    "comment": {"type": "string"},
-                    "coach_tick_id": {
-                        "type": "integer",
-                        "description": "ID of the coach tick to set. Fetch available ticks first.",
-                    },
-                },
-                "required": ["activity_id", "comment"],
+        "strict": False,
+        "name": "delete_planned_workout",
+        "description": "Delete a planned workout from the athlete's Intervals.icu calendar.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string"}
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_planned_workout",
-            "description": "Create a planned workout on the athlete's Intervals.icu calendar.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "date": {"type": "string", "description": "YYYY-MM-DD"},
-                    "name": {"type": "string"},
-                    "description": {"type": "string"},
-                    "sport_type": {"type": "string", "default": "Ride"},
-                    "planned_duration_seconds": {"type": "integer"},
-                    "planned_tss": {"type": "integer"},
-                },
-                "required": ["date", "name", "description"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_planned_workout",
-            "description": "Update/edit an existing planned workout on the athlete's Intervals.icu calendar.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "event_id": {"type": "string"},
-                    "name": {"type": "string"},
-                    "description": {"type": "string"},
-                    "date": {"type": "string", "description": "YYYY-MM-DD"},
-                    "sport_type": {"type": "string"},
-                    "planned_duration_seconds": {"type": "integer"},
-                    "planned_tss": {"type": "integer"},
-                    "category": {"type": "string", "description": "WORKOUT, RACE_A, RACE_B, RACE_C etc."},
-                },
-                "required": ["event_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_upcoming_races",
-            "description": (
-                "Fetch upcoming A-priority races from the athlete's Intervals.icu calendar. "
-                "Call this when planning a week or block to check whether a race is approaching "
-                "and determine the correct training phase."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "days_ahead": {
-                        "type": "integer",
-                        "description": "How many days ahead to look. Default 120.",
-                        "default": 120,
-                    }
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_weekly_note",
-            "description": (
-                "Fetch the weekly planning note from Monday of a given week. "
-                "Always check this before planning or reviewing a week — it contains the overall intent and focus for that week."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "monday_date": {"type": "string", "description": "Date of Monday in YYYY-MM-DD format."}
-                },
-                "required": ["monday_date"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_weekly_note",
-            "description": (
-                "Create or update the weekly planning note on Monday of a given week. "
-                "Write one when none exists, or update when the plan changes. "
-                "Include: block week number, weekly focus, planned sessions with targets, and expected TSS."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "monday_date": {"type": "string", "description": "YYYY-MM-DD of the Monday."},
-                    "name": {"type": "string", "description": "Short title e.g. 'Week 2 — Progressive Overload'"},
-                    "content": {"type": "string", "description": "Full weekly plan content."},
-                    "event_id": {"type": "integer", "description": "Existing event ID if updating rather than creating."},
-                },
-                "required": ["monday_date", "name", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_planned_workout",
-            "description": "Delete a planned workout from the athlete's Intervals.icu calendar.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "event_id": {"type": "string"}
-                },
-                "required": ["event_id"],
-            },
+            "required": ["event_id"],
         },
     },
 ]
@@ -293,11 +292,33 @@ _PLANNING_TOOL_NAMES = {
 }
 
 TOOLS_BY_MODE = {
-    "review":   [t for t in TOOLS if t["function"]["name"] in _REVIEW_TOOL_NAMES],
-    "health":   [t for t in TOOLS if t["function"]["name"] in _HEALTH_TOOL_NAMES],
-    "planning": [t for t in TOOLS if t["function"]["name"] in _PLANNING_TOOL_NAMES],
+    "review":   [t for t in TOOLS if t["name"] in _REVIEW_TOOL_NAMES],
+    "health":   [t for t in TOOLS if t["name"] in _HEALTH_TOOL_NAMES],
+    "planning": [t for t in TOOLS if t["name"] in _PLANNING_TOOL_NAMES],
 }
-_HEALTH_READINESS_TOOLS = [t for t in TOOLS if t["function"]["name"] in _HEALTH_READINESS_TOOL_NAMES]
+_HEALTH_READINESS_TOOLS = [t for t in TOOLS if t["name"] in _HEALTH_READINESS_TOOL_NAMES]
+
+_RECAP_TOOL_NAMES = {
+    "get_recent_activities", "get_wellness", "get_planned_workouts", "get_coach_ticks",
+}
+_WELLNESS_READINESS_TOOL_NAMES = {"get_training_readiness", "get_planned_workouts"}
+_WELLNESS_TOOL_NAMES = {"get_wellness", "get_planned_workouts"}
+
+_RECAP_TOOLS = [t for t in TOOLS if t["name"] in _RECAP_TOOL_NAMES]
+_WELLNESS_READINESS_TOOLS = [t for t in TOOLS if t["name"] in _WELLNESS_READINESS_TOOL_NAMES]
+_WELLNESS_TOOLS = [t for t in TOOLS if t["name"] in _WELLNESS_TOOL_NAMES]
+
+# Fail loudly at import rather than silently shipping a short tool list. Catches a
+# flattening mistake, a duplicate name, and — most valuably — a typo in any of the
+# name sets above, which would otherwise just quietly omit a tool at runtime.
+_TOOL_NAMES = {t["name"] for t in TOOLS}
+assert len(_TOOL_NAMES) == len(TOOLS), "duplicate tool name in TOOLS"
+assert all(t["type"] == "function" and "parameters" in t and t.get("strict") is False
+           for t in TOOLS), "TOOLS must use the flat /v1/responses shape with strict=False"
+for _set in (_REVIEW_TOOL_NAMES, _HEALTH_TOOL_NAMES, _HEALTH_READINESS_TOOL_NAMES,
+             _PLANNING_TOOL_NAMES, _RECAP_TOOL_NAMES, _WELLNESS_READINESS_TOOL_NAMES,
+             _WELLNESS_TOOL_NAMES):
+    assert _set <= _TOOL_NAMES, f"unknown tool name(s): {_set - _TOOL_NAMES}"
 
 AUTO_REVIEW_SYSTEM_PROMPT = """You are an expert cycling coach reviewing a recently completed ride.
 You have direct access to the athlete's training data via Intervals.icu.
@@ -315,7 +336,8 @@ Metric reference:
 - group_ride flag indicates the activity matched the group ride keywords
 - Sweet spot ~84–97% FTP overlaps Z3 and Z4 — never count it as a separate zone
 
-FTP: always use the user-configured ftp from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
+FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
+Pick the sport_settings entry whose `sports` list contains this activity's `type` — never judge a run against ride FTP or ride LTHR. If no entry covers that sport, or the value is null, say the threshold is not configured rather than using another sport's.
 
 For MATCHED workouts (compliance > 0): focus on interval execution — did efforts hit targets, how consistent were the reps, power/HR per interval. Cover zone distribution briefly.
 For UNMATCHED rides: equal weight to interval efforts and zone distribution.
@@ -345,7 +367,8 @@ Metric reference:
 - Sweet spot (~84–97% FTP) overlaps Z3 and Z4 — it is NOT a separate zone. Never list it on top of Z3/Z4 totals
 - compliance > 0 means the ride matched a planned workout — call get_planned_workout(paired_event_id) to compare actual vs planned
 
-FTP: always use the user-configured ftp from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
+FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
+Pick the sport_settings entry whose `sports` list contains this activity's `type` — never judge a run against ride FTP or ride LTHR. If no entry covers that sport, or the value is null, say the threshold is not configured rather than using another sport's.
 
 Analysis rules:
 - Always fetch relevant data before commenting — never assume what a workout looks like
@@ -542,7 +565,7 @@ Structure your recap as follows:
 **Coming week:** 1-2 sentence recommendation based on this week's load and wellness trend.
 
 Keep the recap concise — under 400 words. Write in a direct, coach-to-athlete tone.
-FTP: always use the user-configured ftp from get_coach_ticks, not eFTP.
+FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP, and pick the sport_settings entry matching each activity's type — ride and run thresholds differ.
 feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better.
 """
 
@@ -641,6 +664,7 @@ class TrainingAgent:
         days_back: int = 28,
         chat_model: str = "gpt-5.5",
         auto_review_model: str = "gpt-5.5",
+        reasoning_effort: str = "medium",
         readiness_entity: str = "",
         nightly_hrv_entity: str = "",
     ):
@@ -661,51 +685,116 @@ class TrainingAgent:
         self.days_back_cap = days_back
         self.chat_model = chat_model
         self.auto_review_model = auto_review_model
+        # "" omits the parameter entirely (let the model pick its own default);
+        # "none" is a real API value meaning "reason as little as possible".
+        self.reasoning_effort = (reasoning_effort or "").strip().lower() or None
 
         self._prompt_cache: dict = {}  # "mode:hash" → prompt string
 
-        # Models that reject function tools unless reasoning is switched off on
-        # /v1/chat/completions. Learned at runtime — see _create_completion.
+        # Models that reject the `reasoning` parameter. Learned at runtime — see
+        # _create_response.
         self._no_reasoning_models: set[str] = set()
 
-    def _create_completion(self, **kwargs):
-        """Call chat.completions, working around models that refuse function
-        tools while reasoning is on.
+    def _create_response(self, **kwargs):
+        """Call /v1/responses, degrading gracefully on models without reasoning.
 
-        Newer reasoning models (gpt-5.6 and up) default to a non-zero
-        reasoning_effort and reject tool calls on /v1/chat/completions with:
+        Model names are free text in the add-on config, so we can't know upfront
+        whether one accepts `reasoning` — older models (gpt-4o) reject it. The
+        first such failure is detected, remembered, and the call retried without
+        it; later calls for that model omit it upfront.
 
-            Function tools with reasoning_effort are not supported for <model>
-            in /v1/chat/completions. To use function tools, use /v1/responses
-            or set reasoning_effort to 'none'.
-
-        We can't hardcode which models do this — the model name is free text in
-        the add-on config — so the first such failure is detected, remembered,
-        and the call retried with reasoning disabled. Later calls for that model
-        send it upfront. Models that accept tools normally are never sent the
-        parameter, so older ones (gpt-4o, which rejects it) keep working.
+        Retrying is safe: a request that 400s never reached a tool, so no side
+        effect is replayed.
         """
         model = kwargs.get("model")
         if model in self._no_reasoning_models:
-            kwargs["reasoning_effort"] = "none"
+            kwargs.pop("reasoning", None)
         try:
-            return self.openai.chat.completions.create(**kwargs)
+            return self.openai.responses.create(**kwargs)
         except Exception as e:
-            msg = str(e)
-            if (
-                kwargs.get("reasoning_effort") == "none"
-                or "reasoning_effort" not in msg
-                or "tools" not in msg
-            ):
+            if "reasoning" not in kwargs or "reasoning" not in str(e).lower():
                 raise
             print(
-                f"Model {model} rejects function tools with reasoning enabled — "
-                f"retrying with reasoning_effort='none'.",
+                f"Model {model} does not accept the reasoning parameter — "
+                f"retrying without it.",
                 flush=True,
             )
             self._no_reasoning_models.add(model)
-            kwargs["reasoning_effort"] = "none"
-            return self.openai.chat.completions.create(**kwargs)
+            kwargs.pop("reasoning", None)
+            return self.openai.responses.create(**kwargs)
+
+    def _run_response_loop(self, *, model: str, input_items: list, tools: list,
+                           max_iterations: int, label: str) -> tuple[str, dict]:
+        """Drive a /v1/responses tool-calling loop to a final text answer.
+
+        Returns (text, usage). `usage` deliberately keeps the Chat Completions
+        key names (prompt_tokens/completion_tokens/total_tokens) because
+        main.accumulate_tokens reads exactly those three via .get(k, 0) —
+        emitting the Responses names instead would silently accumulate zero and
+        quietly disable the daily budget gate.
+        """
+        items = list(input_items)  # never mutate the caller's list
+        usage = {"prompt_tokens": 0, "completion_tokens": 0,
+                 "total_tokens": 0, "reasoning_tokens": 0}
+
+        for _ in range(max_iterations):
+            response = self._create_response(
+                model=model,
+                input=items,
+                tools=tools,
+                tool_choice="auto",
+                **({"reasoning": {"effort": self.reasoning_effort}}
+                   if self.reasoning_effort else {}),
+            )
+
+            u = response.usage
+            if u:
+                usage["prompt_tokens"] += u.input_tokens
+                usage["completion_tokens"] += u.output_tokens
+                usage["total_tokens"] += u.total_tokens
+                details = getattr(u, "output_tokens_details", None)
+                if details:
+                    usage["reasoning_tokens"] += details.reasoning_tokens
+
+            # Feed the whole output back verbatim. Reasoning items must travel
+            # with the function_call items they produced, in order, or the next
+            # request 400s ("reasoning item provided without its required
+            # following item") and the model loses its chain of thought between
+            # tool calls. These are SDK objects — do NOT model_dump() them (bare
+            # dumps emit nulls the API rejects), and never persist this list.
+            items += response.output
+
+            calls = [it for it in response.output if it.type == "function_call"]
+            if not calls:
+                text = response.output_text
+                if not text:
+                    raise RuntimeError(
+                        f"{label}: model returned no text "
+                        f"(status={response.status}, "
+                        f"incomplete={response.incomplete_details})"
+                    )
+                return text, usage
+
+            for call in calls:
+                try:
+                    # Zero-arg tools can return "" rather than "{}".
+                    args = json.loads(call.arguments or "{}")
+                except json.JSONDecodeError as e:
+                    items.append({
+                        "type": "function_call_output",
+                        "call_id": call.call_id,
+                        "output": (f"Error parsing tool arguments: {e}. "
+                                   f"Please retry with valid JSON."),
+                    })
+                    continue
+                items.append({
+                    "type": "function_call_output",
+                    "call_id": call.call_id,
+                    "output": self._run_tool(call.name, args),
+                })
+
+        raise RuntimeError(f"{label} exceeded max iterations ({max_iterations}). "
+                           f"LLM may be stuck in a loop.")
 
     def _get_training_readiness(self) -> dict:
         """Read the Garmin training-readiness entity from Home Assistant and
@@ -1009,53 +1098,21 @@ class TrainingAgent:
         messages += trimmed_history
         messages.append({"role": "user", "content": user_message})
 
-        tools = self._tools_for_mode(mode)
-        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        max_iterations = 25
-        for _ in range(max_iterations):
-            response = self._create_completion(
-                model=self.chat_model,
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-            )
-            if response.usage:
-                usage["prompt_tokens"] += response.usage.prompt_tokens
-                usage["completion_tokens"] += response.usage.completion_tokens
-                usage["total_tokens"] += response.usage.total_tokens
-            msg = response.choices[0].message
-
-            if msg.tool_calls:
-                # Serialise to dict so history stays JSON-serialisable
-                messages.append(msg.model_dump())
-                for call in msg.tool_calls:
-                    try:
-                        args = json.loads(call.function.arguments)
-                    except json.JSONDecodeError as e:
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": f"Error parsing tool arguments: {e}. Please retry with valid JSON.",
-                        })
-                        continue
-                    result = self._run_tool(call.function.name, args)
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": result,
-                    })
-            else:
-                reply = msg.content
-                # Store only the lean conversational record (user + assistant text).
-                # Tool-call internals are not re-sent on subsequent turns, so
-                # persisting them just bloats /data/chat_history.json.
-                new_history = list(trimmed_history) + [
-                    {"role": "user", "content": user_message},
-                    {"role": "assistant", "content": reply},
-                ]
-                return reply, new_history, usage
-
-        raise RuntimeError(f"Tool loop exceeded max iterations ({max_iterations}). LLM may be stuck in a loop.")
+        reply, usage = self._run_response_loop(
+            model=self.chat_model,
+            input_items=messages,
+            tools=self._tools_for_mode(mode),
+            max_iterations=25,
+            label="Chat tool loop",
+        )
+        # Store only the lean conversational record (user + assistant text).
+        # Tool-call internals are not re-sent on subsequent turns, so
+        # persisting them just bloats /data/chat_history.json.
+        new_history = list(trimmed_history) + [
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": reply},
+        ]
+        return reply, new_history, usage
 
     def auto_review(self, activity: dict) -> tuple[str, dict]:
         """Generate a coach review for a newly uploaded activity. Returns (comment, token_usage)."""
@@ -1069,10 +1126,15 @@ class TrainingAgent:
             if paired_event_id else
             "Fetch the activity intervals with get_activity_intervals for a full breakdown."
         )
+        # Name the sport explicitly: this path knows it server-side, so the model
+        # never has to infer it to pick the right thresholds.
+        sport = activity.get("type") or "unknown"
         prompt = (
-            f"A new ride was just uploaded. {planned_instruction} "
-            f"Also fetch coach ticks (get_coach_ticks) so you know the athlete's configured FTP, "
-            f"then post a brief coach note on the activity with the most appropriate tick "
+            f"A new {sport} activity was just uploaded. {planned_instruction} "
+            f"Also fetch coach ticks (get_coach_ticks) so you know the athlete's configured "
+            f"thresholds, and use the sport_settings entry whose `sports` list contains "
+            f"\"{sport}\" — not the Ride entry — when interpreting power or HR. "
+            f"Then post a brief coach note on the activity with the most appropriate tick "
             f"(skip tick if list is empty, but always post the comment). "
             f"The note should be 5-10 sentences covering overall execution, standout metrics "
             f"(power consistency, decoupling, HR drift, or planned vs actual), RPE/feel, and "
@@ -1087,43 +1149,13 @@ class TrainingAgent:
             {"role": "user", "content": prompt},
         ]
 
-        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        max_iterations = 15
-        for _ in range(max_iterations):
-            response = self._create_completion(
-                model=self.auto_review_model,
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-            )
-            if response.usage:
-                usage["prompt_tokens"] += response.usage.prompt_tokens
-                usage["completion_tokens"] += response.usage.completion_tokens
-                usage["total_tokens"] += response.usage.total_tokens
-            msg = response.choices[0].message
-            if msg.tool_calls:
-                # Serialise to dict so history stays JSON-serialisable
-                messages.append(msg.model_dump())
-                for call in msg.tool_calls:
-                    try:
-                        args = json.loads(call.function.arguments)
-                    except json.JSONDecodeError as e:
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": f"Error parsing tool arguments: {e}. Please retry with valid JSON.",
-                        })
-                        continue
-                    result = self._run_tool(call.function.name, args)
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": result,
-                    })
-            else:
-                return msg.content, usage
-
-        raise RuntimeError(f"Auto-review tool loop exceeded max iterations ({max_iterations}).")
+        return self._run_response_loop(
+            model=self.auto_review_model,
+            input_items=messages,
+            tools=TOOLS,
+            max_iterations=15,
+            label="Auto-review tool loop",
+        )
 
     def weekly_recap(self) -> tuple[str, dict]:
         """Generate a Monday morning training recap. Returns (recap_text, usage)."""
@@ -1144,41 +1176,17 @@ class TrainingAgent:
             hrv_context=hrv_context,
             rhr_context=rhr_context,
         )
-        recap_tools = [t for t in TOOLS if t["function"]["name"] in {
-            "get_recent_activities", "get_wellness", "get_planned_workouts", "get_coach_ticks",
-        }]
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": "Generate this week's training recap."},
         ]
-        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        max_iterations = 20
-        for _ in range(max_iterations):
-            response = self._create_completion(
-                model=self.auto_review_model,
-                messages=messages,
-                tools=recap_tools,
-                tool_choice="auto",
-            )
-            if response.usage:
-                usage["prompt_tokens"] += response.usage.prompt_tokens
-                usage["completion_tokens"] += response.usage.completion_tokens
-                usage["total_tokens"] += response.usage.total_tokens
-            msg = response.choices[0].message
-            if msg.tool_calls:
-                messages.append(msg.model_dump())
-                for call in msg.tool_calls:
-                    try:
-                        args = json.loads(call.function.arguments)
-                    except json.JSONDecodeError as e:
-                        messages.append({"role": "tool", "tool_call_id": call.id,
-                                         "content": f"Error parsing arguments: {e}."})
-                        continue
-                    messages.append({"role": "tool", "tool_call_id": call.id,
-                                     "content": self._run_tool(call.function.name, args)})
-            else:
-                return msg.content, usage
-        raise RuntimeError("Weekly recap tool loop exceeded max iterations.")
+        return self._run_response_loop(
+            model=self.auto_review_model,
+            input_items=messages,
+            tools=_RECAP_TOOLS,
+            max_iterations=20,
+            label="Weekly recap tool loop",
+        )
 
     def wellness_check(self) -> tuple[str, bool, dict]:
         """Check today's wellness. Uses Garmin training readiness when a readiness
@@ -1188,7 +1196,7 @@ class TrainingAgent:
         today = date_cls.today()
         if self.readiness_entity:
             system = WELLNESS_CHECK_READINESS_PROMPT.format(today=today.isoformat())
-            tool_names = {"get_training_readiness", "get_planned_workouts"}
+            wellness_tools = _WELLNESS_READINESS_TOOLS
         else:
             hrv_context = (
                 f"HRV normal range: {self.hrv_min}–{self.hrv_max} ms."
@@ -1206,39 +1214,17 @@ class TrainingAgent:
                 hrv_max=self.hrv_max or 0,
                 rhr_max=self.rhr_max or 999,
             )
-            tool_names = {"get_wellness", "get_planned_workouts"}
-        wellness_tools = [t for t in TOOLS if t["function"]["name"] in tool_names]
+            wellness_tools = _WELLNESS_TOOLS
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": "Run this morning's wellness check."},
         ]
-        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        max_iterations = 10
-        for _ in range(max_iterations):
-            response = self._create_completion(
-                model=self.auto_review_model,
-                messages=messages,
-                tools=wellness_tools,
-                tool_choice="auto",
-            )
-            if response.usage:
-                usage["prompt_tokens"] += response.usage.prompt_tokens
-                usage["completion_tokens"] += response.usage.completion_tokens
-                usage["total_tokens"] += response.usage.total_tokens
-            msg = response.choices[0].message
-            if msg.tool_calls:
-                messages.append(msg.model_dump())
-                for call in msg.tool_calls:
-                    try:
-                        args = json.loads(call.function.arguments)
-                    except json.JSONDecodeError as e:
-                        messages.append({"role": "tool", "tool_call_id": call.id,
-                                         "content": f"Error parsing arguments: {e}."})
-                        continue
-                    messages.append({"role": "tool", "tool_call_id": call.id,
-                                     "content": self._run_tool(call.function.name, args)})
-            else:
-                content = msg.content or ""
-                is_alert = content.lstrip().startswith("[ALERT]")
-                return content, is_alert, usage
-        raise RuntimeError("Wellness check tool loop exceeded max iterations.")
+        content, usage = self._run_response_loop(
+            model=self.auto_review_model,
+            input_items=messages,
+            tools=wellness_tools,
+            max_iterations=10,
+            label="Wellness check tool loop",
+        )
+        is_alert = content.lstrip().startswith("[ALERT]")
+        return content, is_alert, usage

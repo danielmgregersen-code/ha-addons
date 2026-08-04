@@ -1,6 +1,6 @@
 name: "Training Coach"
 description: "AI coaching agent connected to your Intervals.icu training data."
-version: "1.3.3"
+version: "1.4.1"
 slug: "training_coach"
 init: false
 arch:
@@ -36,6 +36,7 @@ options:
   group_ride_keywords: "group,klub,klubtur"
   chat_model: "gpt-5.5"
   auto_review_model: "gpt-5.5"
+  reasoning_effort: "medium"
   ha_notification_target: ""
   training_readiness_entity: "sensor.garmin_connect_training_readiness"
   nightly_hrv_entity: "sensor.garmin_connect_hrv_last_night_average"
@@ -58,6 +59,7 @@ schema:
   group_ride_keywords: str
   chat_model: str
   auto_review_model: str
+  reasoning_effort: list(none|low|medium|high)
   ha_notification_target: str
   training_readiness_entity: str
   nightly_hrv_entity: str

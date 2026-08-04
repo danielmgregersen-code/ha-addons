@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.4.1
+
+- Fixed runs being analysed against your **cycling** FTP. The coach now reads
+  Intervals.icu's per-sport settings and uses each activity's own thresholds.
+- The same bug affected **LTHR and max HR**, so run heart-rate zones were wrong
+  too — also fixed.
+- If a sport has no thresholds of its own, the coach falls back to your
+  "other sports" settings when you have them, and otherwise says the thresholds
+  aren't configured instead of quietly borrowing another sport's numbers.
+
+## 1.4.0
+
+- Moved to OpenAI's Responses API. Newer reasoning models such as `gpt-5.6` now
+  work **with reasoning switched on**. Version 1.3.3 got them working by turning
+  reasoning off; that compromise is gone.
+- New **Reasoning effort** setting (`none` / `low` / `medium` / `high`, default
+  `medium`). Higher means deeper analysis, more tokens and slower replies.
+- ⚠️ **Your daily token count will rise.** Reasoning tokens are billed as output
+  tokens, and 1.3.3 was suppressing them entirely. If you start hitting the
+  daily-budget confirmation sooner than you used to, raise **Daily token budget**
+  in the add-on settings, or lower **Reasoning effort**.
+- Models that don't support reasoning (such as `gpt-4o`) are detected
+  automatically and keep working.
+
 ## 1.3.3
 
 - Fixed a 400 error when selecting a newer OpenAI reasoning model such as
