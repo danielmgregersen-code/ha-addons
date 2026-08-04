@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.3
+
+- Fixed a 400 error when selecting a newer OpenAI reasoning model such as
+  `gpt-5.6`. Those models refuse function tools unless reasoning is switched
+  off, so the add-on now detects this and retries with reasoning disabled.
+  Older models are unaffected.
+
 ## 1.3.2
 
 - Trimmed the Garmin training-readiness output: dropped the band/level label,
