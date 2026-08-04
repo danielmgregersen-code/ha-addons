@@ -57,6 +57,7 @@ def load_options() -> dict:
         "group_ride_keywords": os.getenv("GROUP_RIDE_KEYWORDS", "group,klub,klubtur"),
         "chat_model": os.getenv("CHAT_MODEL", "gpt-5.5"),
         "auto_review_model": os.getenv("AUTO_REVIEW_MODEL", "gpt-5.5"),
+        "reasoning_effort": os.getenv("REASONING_EFFORT", "medium"),
         "ha_notification_target": os.getenv("HA_NOTIFICATION_TARGET", ""),
         "training_readiness_entity": os.getenv("TRAINING_READINESS_ENTITY", "sensor.garmin_connect_training_readiness"),
         "nightly_hrv_entity": os.getenv("NIGHTLY_HRV_ENTITY", "sensor.garmin_connect_hrv_last_night_average"),
@@ -249,6 +250,7 @@ agent = TrainingAgent(
     days_back=options.get("days_back", 28),
     chat_model=options.get("chat_model", "gpt-5.5"),
     auto_review_model=options.get("auto_review_model", "gpt-5.5"),
+    reasoning_effort=options.get("reasoning_effort", "medium"),
     readiness_entity=options.get("training_readiness_entity", ""),
     nightly_hrv_entity=options.get("nightly_hrv_entity", ""),
 )

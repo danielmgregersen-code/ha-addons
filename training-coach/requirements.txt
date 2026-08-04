@@ -1,6 +1,10 @@
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
-openai>=1.52.0
+# Pinned, not floating: the Responses API needs >=1.66.0, and pip runs at image
+# build time — a floating floor is how a working add-on breaks on a later rebuild.
+# jiter (Rust) ships musllinux_1_1 cp312 wheels for aarch64 and x86_64, so this
+# does not reintroduce the 1.3.1 "no Rust toolchain" build failure.
+openai==2.53.0
 requests==2.32.3
 pydantic==2.7.4
 httpx>=0.27.0,<0.29.0
