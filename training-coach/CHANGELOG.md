@@ -6,8 +6,9 @@
   Intervals.icu's per-sport settings and uses each activity's own thresholds.
 - The same bug affected **LTHR and max HR**, so run heart-rate zones were wrong
   too — also fixed.
-- If a sport has no thresholds configured, the coach now says so instead of
-  quietly borrowing another sport's numbers.
+- If a sport has no thresholds of its own, the coach falls back to your
+  "other sports" settings when you have them, and otherwise says the thresholds
+  aren't configured instead of quietly borrowing another sport's numbers.
 
 ## 1.4.0
 

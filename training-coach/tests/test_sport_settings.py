@@ -111,6 +111,48 @@ class TestMissingSettings(unittest.TestCase):
         self.assertEqual(result["sports_configured"], [])
 
 
+class TestCatchAllEntry(unittest.TestCase):
+    """Intervals.icu's `other` flag marks the group covering sports with no entry
+    of their own. Surfaced as a labelled last resort so it can never shadow a real
+    per-sport match."""
+
+    def test_flag_surfaces_only_when_set(self):
+        result = client(payload([{**RIDE, "other": True}, RUN])).get_athlete()
+        self.assertTrue(entry_for(result, "Ride")["covers_other_sports"])
+        self.assertNotIn("covers_other_sports", entry_for(result, "Run"))
+
+    def test_flag_absent_or_false_is_not_emitted(self):
+        result = client(payload([RIDE, {**RUN, "other": False}])).get_athlete()
+        for sport in ("Ride", "Run"):
+            self.assertNotIn("covers_other_sports", entry_for(result, sport))
+
+    def test_catch_all_does_not_claim_sports_it_does_not_list(self):
+        """A run must still resolve to the Run entry, not the catch-all."""
+        result = client(payload([{**RIDE, "other": True}, RUN])).get_athlete()
+        self.assertEqual(entry_for(result, "Run")["ftp"], 310)
+        self.assertNotIn("Swim", result["sports_configured"])
+
+
+class TestFixturesMatchTheSpec(unittest.TestCase):
+    """Field names and enum values below are taken from the Intervals.icu OpenAPI
+    spec (SportSettings), so the fixtures can't drift into fiction."""
+
+    def test_fixture_fields_are_real_sport_settings_fields(self):
+        spec_fields = {  # SportSettings properties used here
+            "types", "ftp", "lthr", "max_hr", "threshold_pace", "pace_units", "other",
+        }
+        for fixture in (RIDE, RUN):
+            self.assertLessEqual(set(fixture), spec_fields)
+
+    def test_fixture_enum_values_are_valid(self):
+        pace_units = {"SECS_100M", "SECS_100Y", "MINS_KM", "MINS_MILE",
+                      "SECS_500M", "SECS_400M", "SECS_250M", "NONE"}
+        self.assertIn(RUN["pace_units"], pace_units)
+        sport_types = {"Ride", "VirtualRide", "Run", "TrailRun", "VirtualRun", "Swim"}
+        for fixture in (RIDE, RUN):
+            self.assertLessEqual(set(fixture["types"]), sport_types)
+
+
 class TestCoachTicksSideEffect(unittest.TestCase):
     def test_existing_ticks_pass_through_without_a_write(self):
         puts = []

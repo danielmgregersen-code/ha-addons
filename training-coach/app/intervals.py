@@ -74,6 +74,11 @@ class IntervalsClient:
                 value = s.get(field)
                 if value not in (None, ""):
                     entry[field] = value
+            # Intervals.icu's catch-all group, covering sports with no entry of
+            # their own. Flagged only when set so it stays an explicit last resort
+            # rather than something that can shadow a real per-sport match.
+            if s.get("other"):
+                entry["covers_other_sports"] = True
             sport_settings.append(entry)
             covered.update(sports)
 

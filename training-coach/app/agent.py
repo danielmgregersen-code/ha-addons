@@ -136,7 +136,9 @@ TOOLS = [
             "and running power is not comparable to cycling power. Always prefer these configured "
             "values over the eFTP estimated from activity data. A null value means that threshold "
             "is not configured for that sport; if no entry covers the sport at all (see "
-            "sports_configured), say so rather than substituting another sport's numbers."
+            "sports_configured), fall back to an entry flagged covers_other_sports if one "
+            "exists, and otherwise say the thresholds are not configured rather than "
+            "substituting another sport's numbers."
         ),
         "parameters": {"type": "object", "properties": {}},
     },
