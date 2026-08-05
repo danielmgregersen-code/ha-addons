@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.2
+
+- Fixed **Post review** failing with `404 Not Found`. The coach was dropping the
+  leading letter from the activity id (`i172850190` → `172850190`) because the
+  prompt asked it for a "numeric id". Posting also repairs a stripped id
+  automatically, so reviews already waiting in your chat history can be posted.
+- Accepting a review now sets the coach tick, marking the activity as reviewed.
+  Previously it didn't, so the nightly auto-review could later overwrite your
+  in-depth review with its own shorter note.
+- A review that still can't be posted now says which activity id was not found
+  instead of showing a raw error.
+
 ## 1.4.1
 
 - Fixed runs being analysed against your **cycling** FTP. The coach now reads

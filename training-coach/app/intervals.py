@@ -296,12 +296,40 @@ class IntervalsClient:
             })
         return simplified
 
+    @staticmethod
+    def _prefixed_activity_id(activity_id) -> str | None:
+        """The prefixed form of a bare-digit activity id, or None if it isn't bare digits.
+
+        Intervals.icu activity ids are strings carrying a letter prefix ("i172850190").
+        The model reads them correctly out of activity data but sometimes writes the
+        digits alone, which 404s. isascii() matters because non-ASCII digits also pass
+        isdigit() and would build a nonsense path.
+        """
+        s = str(activity_id).strip()
+        return f"i{s}" if s.isascii() and s.isdigit() else None
+
     def post_activity_comment(self, activity_id: str, comment: str, coach_tick_id: int = None):
-        """Post a comment and optionally set a coach tick to mark as reviewed."""
+        """Post a comment and optionally set a coach tick to mark as reviewed.
+
+        Self-heals one specific model mistake — a bare-digit activity id, which
+        Intervals.icu answers with 404. The repair is reactive rather than an
+        unconditional "i" prefix because we can't prove every id in every account
+        carries one; and a PUT that 404'd changed nothing upstream, so retrying it
+        once with the prefixed id is side-effect free. Cannot loop: the retry calls
+        _put directly, and an already-prefixed id yields None above.
+        """
         payload = {"description": comment}
         if coach_tick_id is not None:
             payload["coach_tick"] = coach_tick_id
-        return self._put(f"/activity/{activity_id}", payload)
+        try:
+            return self._put(f"/activity/{activity_id}", payload)
+        except requests.HTTPError as e:
+            alt = self._prefixed_activity_id(activity_id)
+            # e.response can be None, hence getattr rather than attribute access.
+            if alt is None or getattr(e.response, "status_code", None) != 404:
+                raise
+            print(f"Activity {activity_id} not found; retrying as {alt}", flush=True)
+            return self._put(f"/activity/{alt}", payload)
 
     def create_planned_workout(
         self,

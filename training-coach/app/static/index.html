@@ -819,8 +819,15 @@
       if (/\[\[PROPOSE_WORKOUT_CHANGE\]\]/.test(text)) {
         proposal = { kind: 'workout_change' };
       } else {
-        const m = text.match(/\[\[PROPOSE_REVIEW_POST\s+activity_id=([^\]\s]+)\s*\]\]/);
-        if (m) proposal = { kind: 'review_post', activityId: m[1] };
+        // Group 2 is a superset of the old trailing \s*, so markers already stored in
+        // /data (without tick=) still match. The tick is pulled out separately so a
+        // malformed tail degrades to "no tick" instead of failing the outer match and
+        // silently dropping the Accept button.
+        const m = text.match(/\[\[PROPOSE_REVIEW_POST\s+activity_id=([^\]\s]+)([^\]]*)\]\]/);
+        if (m) {
+          const t = m[2].match(/tick\s*=\s*(\d+)/);
+          proposal = { kind: 'review_post', activityId: m[1], tick: t ? parseInt(t[1], 10) : null };
+        }
       }
       display = text.replace(/\[\[PROPOSE_[^\]]*\]\]/g, '').trim();
     }
@@ -835,7 +842,7 @@
       const [acceptBtn, rejectBtn] = row.querySelectorAll('button');
       acceptBtn.addEventListener('click', () => {
         if (proposal.kind === 'workout_change') acceptWorkoutChange(display, row);
-        else acceptReviewPost(proposal.activityId, display, row);
+        else acceptReviewPost(proposal.activityId, proposal.tick, display, row);
       });
       rejectBtn.addEventListener('click', () => rejectProposal(row));
       wrap.appendChild(row);
@@ -865,14 +872,17 @@
     }
   }
 
-  async function acceptReviewPost(activityId, reviewText, row) {
+  async function acceptReviewPost(activityId, coachTickId, reviewText, row) {
     const sid = currentSessionId;
     const acceptBtn = row.querySelector('.msg-action-btn.primary');
     if (acceptBtn) { acceptBtn.disabled = true; acceptBtn.textContent = 'Posting…'; }
     try {
       const res = await fetch(`${BASE}/reviews/post`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sid, activity_id: activityId, comment: reviewText }),
+        body: JSON.stringify({
+          session_id: sid, activity_id: activityId,
+          comment: reviewText, coach_tick_id: coachTickId,
+        }),
       });
       if (!res.ok) {
         let detail = 'Failed to post';

@@ -535,6 +535,8 @@ class PostReviewRequest(BaseModel):
     session_id: str
     activity_id: str
     comment: str
+    # Defaulted so a cached older frontend, which posts only three fields, still validates.
+    coach_tick_id: int | None = None
 
 
 # Inline accept/reject proposal markers the coach may append to a message
@@ -661,9 +663,24 @@ def post_review(req: PostReviewRequest):
     comment = _strip_markers(req.comment)
     if not comment:
         raise HTTPException(status_code=400, detail="Empty review comment.")
+    # Setting the tick is what stops the nightly auto-review from later overwriting
+    # this review (see the coach_tick check in the auto-review loop). The value is
+    # model-authored, so keep it only if it's shaped like a tick id — but never
+    # refuse to post over a bad one. Intervals.icu owns which ids are valid;
+    # athletes can configure custom sets, so we don't range-check against ours.
+    tick = req.coach_tick_id if isinstance(req.coach_tick_id, int) and req.coach_tick_id > 0 else None
     try:
-        agent.icu.post_activity_comment(req.activity_id, comment)
+        agent.icu.post_activity_comment(req.activity_id, comment, coach_tick_id=tick)
+    except requests.HTTPError as e:
+        if getattr(e.response, "status_code", None) == 404:
+            raise HTTPException(status_code=502, detail=(
+                f"Intervals.icu has no activity with id '{req.activity_id}'. The coach may "
+                f"have copied the id wrongly — open the activity on Intervals.icu and check "
+                f"the id in its URL. ({e})"
+            ))
+        raise HTTPException(status_code=502, detail=f"Could not post the review to Intervals.icu: {e}")
     except Exception as e:
+        # ConnectionError/Timeout are not HTTPError, so this fallback must stay.
         raise HTTPException(status_code=502, detail=f"Could not post the review to Intervals.icu: {e}")
     confirmation = "✓ Posted this review as the activity's coach comment on Intervals.icu."
     _resolve_latest_proposal(req.session_id)
