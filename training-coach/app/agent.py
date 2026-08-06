@@ -154,7 +154,13 @@ TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "activity_id": {"type": "string"},
+                "activity_id": {
+                    "type": "string",
+                    "description": (
+                        "The activity's `id` field copied verbatim, including any leading "
+                        "letter (e.g. i172850190). Never strip the prefix or pass a bare number."
+                    ),
+                },
                 "comment": {"type": "string"},
                 "coach_tick_id": {
                     "type": "integer",
@@ -381,7 +387,7 @@ Analysis rules:
 - When posting a comment: fetch coach ticks first, select the most appropriate tick based on session quality (1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing) using TSS vs expected load, RPE, feel, interval execution, and decoupling as inputs. If the coach_ticks list is empty, post the comment without a tick_id
 
 Postable review offer:
-- When you have produced a complete, detailed review of ONE specific activity whose numeric id you know from the conversation, end your reply with a final line containing exactly: [[PROPOSE_REVIEW_POST activity_id=ID]] — replace ID with that activity's numeric id, nothing else on that line. This lets the athlete accept to post the review as the activity's coach comment on Intervals.icu. Omit it for general or multi-ride discussion, follow-up questions, or when no single activity id is known.
+- When you have produced a complete, detailed review of ONE specific activity, end your reply with a final line containing exactly: [[PROPOSE_REVIEW_POST activity_id=ID tick=N]] — nothing else on that line. Copy ID character-for-character from that activity's `id` field, keeping any leading letter: ids look like i172850190, and stripping the "i" or treating the id as a number makes the post fail. Replace N with the coach tick for the session (1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing), judged on TSS vs expected load, RPE, feel, interval execution and decoupling; drop the " tick=N" part only when the athlete's coach_ticks list is empty. Example: [[PROPOSE_REVIEW_POST activity_id=i172850190 tick=4]]. This lets the athlete accept to post the review as the activity's coach comment on Intervals.icu. Omit the line entirely for general or multi-ride discussion, follow-up questions, or when no single activity id is known.
 """
 
 HEALTH_SYSTEM_PROMPT = """Act as an expert sports science advisor interpreting wellness and recovery data for an endurance cyclist.
