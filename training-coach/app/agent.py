@@ -326,6 +326,157 @@ for _set in (_REVIEW_TOOL_NAMES, _HEALTH_TOOL_NAMES, _HEALTH_READINESS_TOOL_NAME
              _WELLNESS_TOOL_NAMES):
     assert _set <= _TOOL_NAMES, f"unknown tool name(s): {_set - _TOOL_NAMES}"
 
+
+# ── Group ride intensity ──
+# One source of truth for how hard the athlete's group rides usually are, threaded
+# into planning, weekly recap, review and auto-review so the four prompts can't drift.
+# NOTE: "moderate" here describes the RIDE. Garmin's readiness bands
+# (poor/low/moderate/high/prime) reuse the same word for something unrelated, so the
+# rendered sentence says so explicitly.
+DEFAULT_GROUP_RIDE_INTENSITY = "moderate"
+
+# Intensity factors for load estimation, split at 3 hours because a group ride's
+# intensity falls off as it gets longer. Two bands rather than a sliding scale: the
+# coach applies this in prose, and a hard threshold is followed consistently where
+# interpolation drifts run to run. TSS ≈ hours × IF² × 100.
+GROUP_RIDE_INTENSITY_FACTORS = {
+    "easy": (0.65, 0.60),
+    "moderate": (0.72, 0.70),
+    "hard": (0.80, 0.77),
+}
+
+# Plausible bounds for the configurable factors, mirrored by the float(...) ranges in
+# config.yaml — change both together. The schema only guards the Home Assistant path;
+# these guard the env-var path and direct construction.
+GROUP_RIDE_FACTOR_MIN, GROUP_RIDE_FACTOR_MAX = 0.30, 1.20
+
+# Where a group ride switches from the short to the long factor. Configurable because
+# "long" is athlete-specific: 3 h suits a club run, not a 90-minute chaingang.
+DEFAULT_GROUP_RIDE_LONG_RIDE_HOURS = 3.0
+GROUP_RIDE_LONG_RIDE_HOURS_MIN, GROUP_RIDE_LONG_RIDE_HOURS_MAX = 1.0, 12.0
+
+GROUP_RIDE_INTENSITY_DESCRIPTIONS = {
+    "easy": (
+        "Expect an endurance/social spin — mostly Z1–Z2 with occasional short surges, no "
+        "sustained sweet spot or threshold work. It does NOT consume one of the weekly hard "
+        "interval sessions."
+    ),
+    "moderate": (
+        "Expect a real but sub-threshold effort — mostly Z2–Z3 with repeated surges into sweet "
+        "spot (~84–97% FTP), harder than a plain endurance ride but without sustained threshold "
+        "or VO2max work. It does NOT consume one of the weekly hard interval sessions, though it "
+        "still carries meaningful load."
+    ),
+    "hard": (
+        "Expect a genuinely hard session — sustained sweet spot and threshold efforts with "
+        "repeated VO2max surges (Z5+), equivalent to a structured intensity workout. It DOES "
+        "consume one of the weekly hard interval sessions and needs the same recovery afterwards "
+        "as an interval day."
+    ),
+}
+
+
+def normalize_group_ride_intensity(value: str) -> str:
+    """Config reaches us as free text on the env-var path, so never trust it: anything
+    that isn't one of the three tiers falls back to the default rather than hitting a
+    prompt. The config.yaml enum only constrains the Home Assistant options path."""
+    level = (value or "").strip().lower()
+    return level if level in GROUP_RIDE_INTENSITY_DESCRIPTIONS else DEFAULT_GROUP_RIDE_INTENSITY
+
+
+def _coerce_number(value, fallback: float, lo: float, hi: float) -> float:
+    """Numbers arrive schema-validated on the Home Assistant path and as free text on the
+    env-var path, so never trust them: anything unusable falls back to the built-in rather
+    than reaching a prompt.
+
+    Two traps worth naming. bool is an int subclass, so float(True) is 1.0 and a stray
+    `true` would become a valid-looking intensity factor. And the range check is written
+    `lo <= n <= hi` rather than a negated form because every NaN comparison is False — the
+    negated version *admits* NaN, which then renders as "nan" in the prompt.
+    """
+    if isinstance(value, bool):
+        return fallback
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number if lo <= number <= hi else fallback
+
+
+def normalize_group_ride_factors(factors: dict | None) -> dict:
+    """Merge per-tier (short, long) overrides over the built-in table, coercing each."""
+    factors = factors or {}
+    resolved = {}
+    for tier, (short_default, long_default) in GROUP_RIDE_INTENSITY_FACTORS.items():
+        raw_short, raw_long = (tuple(factors.get(tier) or ()) + (None, None))[:2]
+        short_if = _coerce_number(raw_short, short_default,
+                                  GROUP_RIDE_FACTOR_MIN, GROUP_RIDE_FACTOR_MAX)
+        long_if = _coerce_number(raw_long, long_default,
+                                 GROUP_RIDE_FACTOR_MIN, GROUP_RIDE_FACTOR_MAX)
+        if long_if > short_if:
+            # Usable, just unusual. Warn rather than clamp or swap: substituting numbers
+            # the athlete never set would make the prompt disagree with the settings page
+            # with nothing in the log to explain the gap.
+            print(f"Warning: group ride intensity factors for '{tier}' are inverted "
+                  f"(long {long_if:.2f} > short {short_if:.2f}). Using them as configured.",
+                  flush=True)
+        resolved[tier] = (short_if, long_if)
+    return resolved
+
+
+def group_ride_factors_from_options(options: dict | None) -> dict:
+    """Six flat config options → the factor table. Lives here rather than in main.py so
+    the option-name mapping is unit-testable: the tests can't import main (no fastapi
+    offline), and a typo'd key there would silently yield defaults with no error."""
+    options = options or {}
+    return normalize_group_ride_factors({
+        tier: (options.get(f"group_ride_if_{tier}_short"),
+               options.get(f"group_ride_if_{tier}_long"))
+        for tier in GROUP_RIDE_INTENSITY_FACTORS
+    })
+
+
+def _hours_phrase(hours) -> str:
+    """"3 hours" / "2.5 hours" / "1 hour".
+
+    :g rather than a fixed precision because Home Assistant coerces float options through
+    vol.Coerce(float) before writing options.json, so a configured 3 always arrives as 3.0
+    and would otherwise render "3.0 hours". The singular matters too: "rides of 1 hours or
+    more" is the kind of sloppiness that makes a model second-guess the instruction.
+    """
+    hours = _coerce_number(hours, DEFAULT_GROUP_RIDE_LONG_RIDE_HOURS,
+                           GROUP_RIDE_LONG_RIDE_HOURS_MIN, GROUP_RIDE_LONG_RIDE_HOURS_MAX)
+    return f"{hours:g} hour" + ("" if hours == 1 else "s")
+
+
+def group_ride_intensity_context(level: str, factors: dict | None = None,
+                                 long_ride_hours=None) -> str:
+    """The shared sentence. Passed as a .format() *value*, never used as a template."""
+    level = normalize_group_ride_intensity(level)
+    # Total for a partial dict, so a hand-built {"hard": ...} can't KeyError in a prompt.
+    short_if, long_if = (factors or {}).get(level) or GROUP_RIDE_INTENSITY_FACTORS[level]
+    hours = _hours_phrase(long_ride_hours)
+    return (
+        f'Typical group ride intensity: the athlete has configured their group rides as '
+        f'"{level}" — this describes how hard the ride itself is, and is NOT a Garmin '
+        f'training-readiness band (which reuses the same words for something unrelated). '
+        f'{GROUP_RIDE_INTENSITY_DESCRIPTIONS[level]} '
+        f'For load estimation only, assume an intensity factor of {short_if:.2f} for rides under '
+        f'{hours} and {long_if:.2f} for rides of {hours} or more, then TSS ≈ hours × IF² × 100.'
+    )
+
+
+def group_ride_flag_context(level: str, factors: dict | None = None,
+                            long_ride_hours=None) -> str:
+    """Bullet form for the Review / Auto-review metric reference lists."""
+    return (
+        "- group_ride flag: true means the activity matched the athlete's group ride keywords. "
+        + group_ride_intensity_context(level, factors, long_ride_hours)
+        + " Judge such a ride against that expectation, not against structured-interval targets "
+        "— an unstructured effort is not a failed workout."
+    )
+
+
 AUTO_REVIEW_SYSTEM_PROMPT = """You are an expert cycling coach reviewing a recently completed ride.
 You have direct access to the athlete's training data via Intervals.icu.
 
@@ -339,7 +490,7 @@ Metric reference:
 - efficiency_factor: power/HR ratio — higher is more aerobically efficient
 - variability_index: NP/AP — closer to 1.0 means steady effort
 - compliance >0 means the ride matched a planned workout — call get_planned_workout(paired_event_id) to compare actual vs planned
-- group_ride flag indicates the activity matched the group ride keywords
+{group_ride_context}
 - Sweet spot ~84–97% FTP overlaps Z3 and Z4 — never count it as a separate zone
 
 FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
@@ -372,6 +523,7 @@ Metric reference:
 - polarization_index: distribution between low and high intensity
 - Sweet spot (~84–97% FTP) overlaps Z3 and Z4 — it is NOT a separate zone. Never list it on top of Z3/Z4 totals
 - compliance > 0 means the ride matched a planned workout — call get_planned_workout(paired_event_id) to compare actual vs planned
+{group_ride_context}
 
 FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
 Pick the sport_settings entry whose `sports` list contains this activity's `type` — never judge a run against ride FTP or ride LTHR. If no entry covers that sport, or the value is null, say the threshold is not configured rather than using another sport's.
@@ -385,6 +537,7 @@ Analysis rules:
 - Auto-detected intervals capture only the hard efforts the device flagged. Gaps between detected intervals are NOT necessarily recovery — never label them as such unless low power/HR/intensity_pct actually supports it. Describe what the data shows, not assumed structure
 - When analysing intervals, comment on consistency across efforts, power/HR drift, and whether targets were met
 - When posting a comment: fetch coach ticks first, select the most appropriate tick based on session quality (1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing) using TSS vs expected load, RPE, feel, interval execution, and decoupling as inputs. If the coach_ticks list is empty, post the comment without a tick_id
+- When judging a group ride for a coach tick, hold it to the athlete's configured group ride intensity. Do not mark it down for unstructured pacing or a high variability index — that is the nature of riding in a bunch
 
 Postable review offer:
 - When you have produced a complete, detailed review of ONE specific activity, end your reply with a final line containing exactly: [[PROPOSE_REVIEW_POST activity_id=ID tick=N]] — nothing else on that line. Copy ID character-for-character from that activity's `id` field, keeping any leading letter: ids look like i172850190, and stripping the "i" or treating the id as a number makes the post fail. Replace N with the coach tick for the session (1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing), judged on TSS vs expected load, RPE, feel, interval execution and decoupling; drop the " tick=N" part only when the athlete's coach_ticks list is empty. Example: [[PROPOSE_REVIEW_POST activity_id=i172850190 tick=4]]. This lets the athlete accept to post the review as the activity's coach comment on Intervals.icu. Omit the line entirely for general or multi-ride discussion, follow-up questions, or when no single activity id is known.
@@ -534,8 +687,10 @@ Fueling plan: whenever you plan or update a workout, always include a fueling re
 
 Group ride handling:
   * When planning a week: call get_planned_workouts and scan for group ride keywords. Ask if any group rides are expected that are not yet on the calendar
-  * For each group ride, ask: (1) should it count as one of the {hard_intervals_per_week} hard sessions? (2) if yes, what type? Adjust additional structured sessions accordingly
-  * Do not pre-reserve a day or assign a fixed TSS estimate for group rides
+  * Apply the athlete's configured group ride intensity (stated under "Group rides" above) as the default for every group ride — do not ask them to classify each ride. When that setting says the ride consumes a hard interval session, count it as one of the {hard_intervals_per_week} and plan correspondingly fewer structured sessions that week. When it does not, still plan the full {hard_intervals_per_week} structured sessions, and keep the day before and after the group ride genuinely easy so its load is absorbed
+  * Estimate the group ride's load from its expected duration and the configured intensity factor, and budget that estimate into the weekly {max_hours} h / {max_tss} TSS cap. Ask for the expected duration if you do not know it; state the number in the weekly note as an estimate ("~X TSS estimated"), never as a target the athlete must hit
+  * Do not pre-reserve a day for group rides, and never create a planned workout with a structured description or load target for one — it would be matched against the actual ride and scored as non-compliant, so the athlete gets marked down for missing intervals nobody planned. The estimate belongs in the weekly note only
+  * If the athlete says a specific ride will be harder or easier than their usual group ride, that overrides the configured default for that ride alone — do not change the default
 
 Planned workouts — duplicate prevention: before calling create_planned_workout for any date, check get_planned_workouts results for that date. If a workout already exists there, use update_planned_workout with its event_id instead. Never call create_planned_workout for a date that already has a workout. The system silently handles deduplication — if a workout already exists on a date, the create call is automatically redirected to an update and returns status: ok. Do not re-fetch the calendar to verify this; proceed directly to the next workout.
 
@@ -551,8 +706,9 @@ You have direct access to the athlete's training data via Intervals.icu.
 
 Today's date: {today}
 
-Athlete targets: weekly cap {max_hours} h / {max_tss} TSS.
+Athlete targets: weekly cap {max_hours} h / {max_tss} TSS, {hard_intervals_per_week} hard interval sessions.
 Athlete baselines: {hrv_context} {rhr_context}
+{group_ride_context}
 
 Your task: generate a structured weekly recap for the past 7 days.
 
@@ -564,8 +720,8 @@ Steps:
 Structure your recap as follows:
 ## Week in review — {today}
 **Load:** total TSS and hours for the week vs the {max_tss} TSS / {max_hours} h target.
-**Sessions:** bullet per session — date, name, brief description of what it was and how it went (compliance, RPE, feel). Flag any sessions that were missed or significantly under/over target.
-**Wellness trend:** HRV and RHR over the week relative to athlete baselines. Note any suppressed days and whether they aligned with hard sessions.
+**Sessions:** bullet per session — date, name, brief description of what it was and how it went (compliance, RPE, feel). Flag any sessions that were missed or significantly under/over target. An activity with group_ride=true is a group ride: judge it against the group ride intensity above, and never flag it as under-target for lacking interval structure.
+**Wellness trend:** HRV and RHR over the week relative to athlete baselines. Count how many hard sessions the week actually contained against the target of {hard_intervals_per_week} — a group ride counts as a hard session only when the configured group ride intensity says it consumes one. Note any suppressed days and whether they aligned with those hard sessions.
 **Highlights:** 1-2 standout positives from the week.
 **Concerns:** any patterns worth watching (chronic underperformance, signs of fatigue, compliance issues).
 **Coming week:** 1-2 sentence recommendation based on this week's load and wellness trend.
@@ -667,6 +823,9 @@ class TrainingAgent:
         hard_intervals_per_week: int = 3,
         block_start_date: str = "",
         group_ride_keywords: str = "group,klub,klubtur",
+        group_ride_intensity: str = DEFAULT_GROUP_RIDE_INTENSITY,
+        group_ride_factors: dict | None = None,
+        group_ride_long_ride_hours=None,
         days_back: int = 28,
         chat_model: str = "gpt-5.5",
         auto_review_model: str = "gpt-5.5",
@@ -688,6 +847,13 @@ class TrainingAgent:
         self.hard_intervals_per_week = hard_intervals_per_week
         self.block_start_date = block_start_date
         self.group_ride_keywords = [k.strip() for k in group_ride_keywords.split(",") if k.strip()]
+        self.group_ride_intensity = normalize_group_ride_intensity(group_ride_intensity)
+        # Re-normalising an already-normalised dict is idempotent and free; __init__ has
+        # to defend itself regardless of caller, since tests construct it directly.
+        self.group_ride_factors = normalize_group_ride_factors(group_ride_factors)
+        self.group_ride_long_ride_hours = _coerce_number(
+            group_ride_long_ride_hours, DEFAULT_GROUP_RIDE_LONG_RIDE_HOURS,
+            GROUP_RIDE_LONG_RIDE_HOURS_MIN, GROUP_RIDE_LONG_RIDE_HOURS_MAX)
         self.days_back_cap = days_back
         self.chat_model = chat_model
         self.auto_review_model = auto_review_model
@@ -994,6 +1160,11 @@ class TrainingAgent:
             self.hard_intervals_per_week,
             self.block_start_date,
             tuple(self.group_ride_keywords),
+            self.group_ride_intensity,
+            # Sorted rather than the dict itself: str(dict) is insertion-ordered, and a
+            # sorted tuple removes the question entirely.
+            tuple(sorted((tier, s, l) for tier, (s, l) in self.group_ride_factors.items())),
+            self.group_ride_long_ride_hours,
             bool(self.readiness_entity),
             today.isoformat(),
         )
@@ -1028,7 +1199,10 @@ class TrainingAgent:
             block_context = "Block start date not configured — ask the athlete which week of the block they are in if relevant."
 
         kw_str = ", ".join(self.group_ride_keywords) if self.group_ride_keywords else "none"
-        group_context = f"Group ride auto-detection keywords: {kw_str}."
+        group_context = (
+            f"Group ride auto-detection keywords: {kw_str}.\n"
+            f"{group_ride_intensity_context(self.group_ride_intensity, self.group_ride_factors, self.group_ride_long_ride_hours)}"
+        )
 
         if mode == "health":
             if self.readiness_entity:
@@ -1049,7 +1223,12 @@ class TrainingAgent:
                 group_context=group_context,
             )
         else:  # "review" and any unknown mode
-            prompt = REVIEW_SYSTEM_PROMPT.format(today=today.isoformat())
+            prompt = REVIEW_SYSTEM_PROMPT.format(
+                today=today.isoformat(),
+                group_ride_context=group_ride_flag_context(
+                    self.group_ride_intensity, self.group_ride_factors,
+                    self.group_ride_long_ride_hours),
+            )
 
         self._prompt_cache[cache_key] = prompt
         return prompt
@@ -1149,7 +1328,12 @@ class TrainingAgent:
         )
         # Use a dedicated short system prompt — the full chat prompt's planning,
         # race-phase, and workout-creation rules aren't needed for ride review.
-        system = AUTO_REVIEW_SYSTEM_PROMPT.format(today=date_cls.today().isoformat())
+        system = AUTO_REVIEW_SYSTEM_PROMPT.format(
+            today=date_cls.today().isoformat(),
+            group_ride_context=group_ride_flag_context(
+                self.group_ride_intensity, self.group_ride_factors,
+                self.group_ride_long_ride_hours),
+        )
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
@@ -1181,6 +1365,10 @@ class TrainingAgent:
             max_tss=self.max_tss,
             hrv_context=hrv_context,
             rhr_context=rhr_context,
+            hard_intervals_per_week=self.hard_intervals_per_week,
+            group_ride_context=group_ride_intensity_context(
+                self.group_ride_intensity, self.group_ride_factors,
+                self.group_ride_long_ride_hours),
         )
         messages = [
             {"role": "system", "content": system},

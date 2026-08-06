@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.5.0
+
+- New **Group ride intensity** setting (`easy` / `moderate` / `hard`, default
+  `moderate`). The coach no longer asks you to classify every group ride — it
+  applies your setting instead.
+- Only `hard` spends one of your weekly hard-interval sessions. On `easy` or
+  `moderate` the coach keeps planning your full quota of structured sessions and
+  keeps the days either side of the group ride genuinely easy.
+- The coach can now estimate a group ride's TSS and budget it into your weekly
+  cap. The intensity factors it uses are settings, so you can tune them against
+  how your own rides turn out: `group_ride_if_<tier>_short` and `_long` for each
+  tier, defaulting to 0.65 / 0.60 (easy), 0.72 / 0.70 (moderate) and
+  0.80 / 0.77 (hard). `group_ride_long_ride_hours` (default 3, accepts halves)
+  sets where a ride switches from the short factor to the long one.
+- It still won't put a planned workout on a group-ride day — that would score
+  the ride as non-compliant against intervals nobody planned.
+- The weekly recap now counts hard sessions against your weekly target, and no
+  longer treats a group ride as a failed workout for lacking interval structure.
+
 ## 1.4.2
 
 - Fixed **Post review** failing with `404 Not Found`. The coach was dropping the
