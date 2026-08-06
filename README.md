@@ -229,8 +229,12 @@ The add-on reads these states through Home Assistant's API using the Supervisor 
 | `hard_intervals_per_week` | Number of hard interval sessions to target per week (default: 3) |
 | `block_start_date` | Monday that started your current training season in `YYYY-MM-DD` format. Set once — the 4-week cycle repeats automatically |
 | `group_ride_keywords` | Keywords to auto-detect group rides in activity names/tags (default: `group,klub,klubtur`) |
+| `group_ride_intensity` | How hard your group rides usually are: `easy`, `moderate` or `hard` (default: `moderate`). Only `hard` counts a group ride against your weekly hard-interval target; `easy` and `moderate` leave the full quota of structured sessions in place. Also selects which pair of intensity factors below is used |
+| `group_ride_if_<tier>_short` / `group_ride_if_<tier>_long` | Intensity factor the coach assumes when estimating a group ride's TSS, per tier and ride length. Defaults: easy 0.65/0.60, moderate 0.72/0.70, hard 0.80/0.77. Only the tier selected in `group_ride_intensity` is used. Quoted to two decimals; rarely worth changing |
+| `group_ride_long_ride_hours` | Where a group ride switches from the short to the long intensity factor, in hours (default: 3). Accepts halves, e.g. 2.5 |
 | `chat_model` | OpenAI model used for interactive chat (default: `gpt-5.5`) |
 | `auto_review_model` | OpenAI model used for all automated tasks — auto-review, weekly recap, wellness check (default: `gpt-5.5`) |
+| `reasoning_effort` | How much the model reasons before answering: `none`, `low`, `medium` or `high` (default: `medium`). Higher means deeper analysis, more tokens and slower replies |
 | `ha_notification_target` | HA notify service name for push notifications, e.g. `mobile_app_iphone`. Leave empty to disable push |
 | `training_readiness_entity` | Home Assistant entity holding your Garmin training readiness score (0–100). Default: `sensor.garmin_connect_training_readiness`. When set, the wellness check and Health tab are driven by this score and its factor breakdown (bands: poor 1–24, low 25–49, moderate 50–74, high 75–94, prime 95–100). Leave empty to use Intervals.icu HRV/RHR/sleep/form instead |
 | `nightly_hrv_entity` | Home Assistant entity holding last night's average HRV in ms. Default: `sensor.garmin_connect_hrv_last_night_average`. Only used in the Garmin path, to report last-night HRV alongside the weekly average. Leave empty to omit it |

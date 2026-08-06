@@ -1,6 +1,6 @@
 name: "Training Coach"
 description: "AI coaching agent connected to your Intervals.icu training data."
-version: "1.4.2"
+version: "1.5.0"
 slug: "training_coach"
 init: false
 arch:
@@ -34,6 +34,14 @@ options:
   hard_intervals_per_week: 3
   block_start_date: ""
   group_ride_keywords: "group,klub,klubtur"
+  group_ride_intensity: "moderate"
+  group_ride_if_easy_short: 0.65
+  group_ride_if_easy_long: 0.60
+  group_ride_if_moderate_short: 0.72
+  group_ride_if_moderate_long: 0.70
+  group_ride_if_hard_short: 0.80
+  group_ride_if_hard_long: 0.77
+  group_ride_long_ride_hours: 3
   chat_model: "gpt-5.5"
   auto_review_model: "gpt-5.5"
   reasoning_effort: "medium"
@@ -57,6 +65,14 @@ schema:
   hard_intervals_per_week: int
   block_start_date: str
   group_ride_keywords: str
+  group_ride_intensity: list(easy|moderate|hard)
+  group_ride_if_easy_short: float(0.3,1.2)
+  group_ride_if_easy_long: float(0.3,1.2)
+  group_ride_if_moderate_short: float(0.3,1.2)
+  group_ride_if_moderate_long: float(0.3,1.2)
+  group_ride_if_hard_short: float(0.3,1.2)
+  group_ride_if_hard_long: float(0.3,1.2)
+  group_ride_long_ride_hours: float(1,12)
   chat_model: str
   auto_review_model: str
   reasoning_effort: list(none|low|medium|high)

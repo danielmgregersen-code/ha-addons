@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from agent import TrainingAgent
+from agent import TrainingAgent, group_ride_factors_from_options
 from chains import ChainManager, infer_condition, CONDITION_MULTIPLIERS
 
 OPTIONS_FILE = "/data/options.json"
@@ -55,6 +55,14 @@ def load_options() -> dict:
         "hard_intervals_per_week": int(os.getenv("HARD_INTERVALS_PER_WEEK", "3")),
         "block_start_date": os.getenv("BLOCK_START_DATE", ""),
         "group_ride_keywords": os.getenv("GROUP_RIDE_KEYWORDS", "group,klub,klubtur"),
+        "group_ride_intensity": os.getenv("GROUP_RIDE_INTENSITY", "moderate"),
+        # No defaults for the factors on purpose: agent.GROUP_RIDE_INTENSITY_FACTORS is
+        # the single source of truth and a missing key resolves to it. Mirroring the
+        # numbers here would be a fourth copy that can silently disagree with
+        # config.yaml, agent.py and the README.
+        **{f"group_ride_if_{tier}_{band}": os.getenv(f"GROUP_RIDE_IF_{tier.upper()}_{band.upper()}")
+           for tier in ("easy", "moderate", "hard") for band in ("short", "long")},
+        "group_ride_long_ride_hours": os.getenv("GROUP_RIDE_LONG_RIDE_HOURS"),
         "chat_model": os.getenv("CHAT_MODEL", "gpt-5.5"),
         "auto_review_model": os.getenv("AUTO_REVIEW_MODEL", "gpt-5.5"),
         "reasoning_effort": os.getenv("REASONING_EFFORT", "medium"),
@@ -247,6 +255,9 @@ agent = TrainingAgent(
     hard_intervals_per_week=options.get("hard_intervals_per_week", 3),
     block_start_date=options.get("block_start_date", ""),
     group_ride_keywords=options.get("group_ride_keywords", "group,klub,klubtur"),
+    group_ride_intensity=options.get("group_ride_intensity", "moderate"),
+    group_ride_factors=group_ride_factors_from_options(options),
+    group_ride_long_ride_hours=options.get("group_ride_long_ride_hours"),
     days_back=options.get("days_back", 28),
     chat_model=options.get("chat_model", "gpt-5.5"),
     auto_review_model=options.get("auto_review_model", "gpt-5.5"),
