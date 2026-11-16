@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.6.0
+
+- The coach now has a **training memory**: a record of how your training actually
+  went, kept in the add-on and used when it plans. It means it no longer has to
+  re-read months of history from Intervals.icu every time you talk to it, which
+  was the bulk of the token cost.
+- It remembers, per session: planned vs. actual TSS and time, compliance, RPE,
+  feel and decoupling — plus a one-line note from the auto-review, in its own
+  words, about what actually happened.
+- Per week it keeps hours, TSS, hard sessions, average RPE and feel, and the
+  verdict from the Monday recap.
+- It also notices **planned sessions you skipped**, and tells the difference
+  between skipping one and riding something else instead.
+- Used when planning, in the Monday recap, when reviewing a single ride, and in
+  the morning wellness check — which previously had no idea what you rode
+  yesterday.
+- On install it fills itself in from your last six months once. That costs no
+  tokens at all: it is one request, read by the add-on, never sent to the model.
+- Nothing is ever deleted. The memory lives in `/data` and survives add-on
+  updates.
+
 ## 1.5.0
 
 - New **Group ride intensity** setting (`easy` / `moderate` / `hard`, default

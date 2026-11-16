@@ -2,6 +2,7 @@ import json
 from openai import OpenAI
 from intervals import IntervalsClient
 from homeassistant import HAClient
+from memory import MEMORY_SENTINEL, MEMORY_USAGE_INSTRUCTIONS
 
 
 def _readiness_band(score: float) -> str:
@@ -481,6 +482,7 @@ AUTO_REVIEW_SYSTEM_PROMPT = """You are an expert cycling coach reviewing a recen
 You have direct access to the athlete's training data via Intervals.icu.
 
 Today's date: {today}
+{memory_context}
 
 Metric reference:
 - feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
@@ -504,10 +506,13 @@ Auto-detected intervals capture only the hard efforts the device flagged. Gaps b
 When posting via post_activity_comment, always include a coach_tick reflecting session quality:
 1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing — based on TSS vs expected, RPE, feel, interval execution, and decoupling.
 If coach_ticks list is empty, post the comment without a tick_id — never refuse to comment.
+
+After posting the comment, end your reply with a final line containing exactly: [[MEMO <one sentence, max 200 characters, no square brackets>]] — a note your future self will read months from now with no access to this ride's data. Say what was executed or missed and anything that should change next time. Not a score, not a restatement of the numbers. Nothing else on that line.
 """
 
 
 REVIEW_SYSTEM_PROMPT = """Act as an expert cycling coach reviewing and analysing rides.
+{memory_context}
 You have direct access to the athlete's training data via Intervals.icu.
 Support follow-up questions — this is an interactive conversation about one or more rides.
 
@@ -544,6 +549,7 @@ Postable review offer:
 """
 
 HEALTH_SYSTEM_PROMPT = """Act as an expert sports science advisor interpreting wellness and recovery data for an endurance cyclist.
+{memory_context}
 You have direct access to the athlete's training data via Intervals.icu.
 Your role is to interpret health signals and advise whether the current training plan should be adjusted.
 
@@ -575,6 +581,7 @@ Constraints:
 """
 
 HEALTH_READINESS_SYSTEM_PROMPT = """Act as an expert sports science advisor interpreting recovery data for an endurance cyclist.
+{memory_context}
 The athlete's recovery is measured by Garmin training readiness, read from Home Assistant via get_training_readiness. Today's planned workout, if needed, comes from Intervals.icu via get_planned_workouts.
 Your role is to interpret these signals and advise whether the current training plan should be adjusted. This mode is read-only.
 
@@ -600,6 +607,7 @@ Constraints:
 """
 
 PLANNING_SYSTEM_PROMPT = """Act as an expert endurance cycling coach building and managing training plans for a time-crunched athlete.
+{memory_context}
 Your goal is to maximise physiological adaptations under {max_hours} hours and {max_tss} TSS per week.
 Prioritise high-quality, targeted intensity and strict fatigue management over junk miles.
 You have direct access to the athlete's calendar and training data via Intervals.icu.
@@ -702,6 +710,7 @@ When writing a weekly note: block week and focus (1-2 sentences), each planned s
 """
 
 WEEKLY_RECAP_SYSTEM_PROMPT = """You are an expert cycling coach generating an automated Monday morning training recap.
+{memory_context}
 You have direct access to the athlete's training data via Intervals.icu.
 
 Today's date: {today}
@@ -727,11 +736,13 @@ Structure your recap as follows:
 **Coming week:** 1-2 sentence recommendation based on this week's load and wellness trend.
 
 Keep the recap concise — under 400 words. Write in a direct, coach-to-athlete tone.
+End with a final line containing exactly: [[MEMO <one sentence, max 200 characters, no square brackets>]] — the one thing about this week worth remembering months from now. Base it on the week's data you just read, never on earlier memory notes. Nothing else on that line.
 FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP, and pick the sport_settings entry matching each activity's type — ride and run thresholds differ.
 feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better.
 """
 
 WELLNESS_CHECK_SYSTEM_PROMPT = """You are an expert sports science advisor running a morning wellness check for an endurance cyclist.
+{memory_context}
 You have direct access to the athlete's training data via Intervals.icu.
 
 Today's date: {today}
@@ -771,6 +782,7 @@ Constraints: do not create or modify any calendar events. Suggestions only.
 
 
 WELLNESS_CHECK_READINESS_PROMPT = """You are an expert sports science advisor running a morning wellness check for an endurance cyclist.
+{memory_context}
 The athlete's recovery is measured by Garmin training readiness, read from Home Assistant. Today's planned workout comes from Intervals.icu.
 
 Today's date: {today}
@@ -826,6 +838,7 @@ class TrainingAgent:
         group_ride_intensity: str = DEFAULT_GROUP_RIDE_INTENSITY,
         group_ride_factors: dict | None = None,
         group_ride_long_ride_hours=None,
+        memory=None,
         days_back: int = 28,
         chat_model: str = "gpt-5.5",
         auto_review_model: str = "gpt-5.5",
@@ -854,6 +867,9 @@ class TrainingAgent:
         self.group_ride_long_ride_hours = _coerce_number(
             group_ride_long_ride_hours, DEFAULT_GROUP_RIDE_LONG_RIDE_HOURS,
             GROUP_RIDE_LONG_RIDE_HOURS_MIN, GROUP_RIDE_LONG_RIDE_HOURS_MAX)
+        # Injected, not constructed here: building the store at import would make
+        # every TrainingAgent(...) in the test suite write to /data.
+        self.memory = memory
         self.days_back_cap = days_back
         self.chat_model = chat_model
         self.auto_review_model = auto_review_model
@@ -1147,6 +1163,33 @@ class TrainingAgent:
         except (KeyError, ValueError, TypeError, AttributeError, RuntimeError, OSError) as e:
             return json.dumps({"error": str(e)})
 
+    # Chat modes → the memory slice each one wants. Planning gets weekly rollups
+    # and trends; review gets this athlete's normal ranges; health gets recent load.
+    _MEMORY_SCOPES = {"planning": "planning", "review": "review", "health": "wellness"}
+
+    def memory_block(self, scope: str) -> str:
+        """Rendered memory for a scope, or "" when there is no store or no data."""
+        if not self.memory:
+            return ""
+        try:
+            return self.memory.render(
+                scope,
+                group_ride_is_hard=self.group_ride_intensity == "hard",
+                max_hours=self.max_hours, max_tss=self.max_tss)
+        except Exception as e:  # memory must never take down a prompt
+            print(f"Warning: could not render training memory: {e}", flush=True)
+            return ""
+
+    def _inject_memory(self, prompt: str, mode: str) -> str:
+        """Substitute the live memory block into a cached prompt.
+
+        The cache must never hold the block itself: config_key carries today's
+        date, but memory changes within the day — every auto-review and every
+        sweep — so a cached block would be stale for hours.
+        """
+        return prompt.replace(MEMORY_SENTINEL, self.memory_block(
+            self._MEMORY_SCOPES.get(mode, "review")))
+
     def _build_system(self, mode: str) -> str:
         import hashlib
         from datetime import date as date_cls
@@ -1170,7 +1213,7 @@ class TrainingAgent:
         )
         cache_key = hashlib.md5(str(config_key).encode()).hexdigest()
         if cache_key in self._prompt_cache:
-            return self._prompt_cache[cache_key]
+            return self._inject_memory(self._prompt_cache[cache_key], mode)
 
         hrv_context = (
             f"HRV normal range: {self.hrv_min}–{self.hrv_max} ms. Below {self.hrv_min} is suppressed, above {self.hrv_max} is elevated."
@@ -1206,16 +1249,19 @@ class TrainingAgent:
 
         if mode == "health":
             if self.readiness_entity:
-                prompt = HEALTH_READINESS_SYSTEM_PROMPT.format(today=today.isoformat())
+                prompt = HEALTH_READINESS_SYSTEM_PROMPT.format(
+                    today=today.isoformat(), memory_context=MEMORY_SENTINEL)
             else:
                 prompt = HEALTH_SYSTEM_PROMPT.format(
                     today=today.isoformat(),
+                    memory_context=MEMORY_SENTINEL,
                     hrv_context=hrv_context,
                     rhr_context=rhr_context,
                 )
         elif mode == "planning":
             prompt = PLANNING_SYSTEM_PROMPT.format(
                 today=today.isoformat(),
+                memory_context=MEMORY_SENTINEL,
                 max_hours=self.max_hours,
                 max_tss=self.max_tss,
                 block_context=block_context,
@@ -1225,13 +1271,14 @@ class TrainingAgent:
         else:  # "review" and any unknown mode
             prompt = REVIEW_SYSTEM_PROMPT.format(
                 today=today.isoformat(),
+                memory_context=MEMORY_SENTINEL,
                 group_ride_context=group_ride_flag_context(
                     self.group_ride_intensity, self.group_ride_factors,
                     self.group_ride_long_ride_hours),
             )
 
         self._prompt_cache[cache_key] = prompt
-        return prompt
+        return self._inject_memory(prompt, mode)
 
     def _tools_for_mode(self, mode: str) -> list:
         """Tools available in a chat mode. Health uses the Garmin readiness tool set
@@ -1330,6 +1377,7 @@ class TrainingAgent:
         # race-phase, and workout-creation rules aren't needed for ride review.
         system = AUTO_REVIEW_SYSTEM_PROMPT.format(
             today=date_cls.today().isoformat(),
+            memory_context=self.memory_block("review"),
             group_ride_context=group_ride_flag_context(
                 self.group_ride_intensity, self.group_ride_factors,
                 self.group_ride_long_ride_hours),
@@ -1361,6 +1409,7 @@ class TrainingAgent:
         )
         system = WEEKLY_RECAP_SYSTEM_PROMPT.format(
             today=today.isoformat(),
+            memory_context=self.memory_block("recap"),
             max_hours=self.max_hours,
             max_tss=self.max_tss,
             hrv_context=hrv_context,
@@ -1389,7 +1438,8 @@ class TrainingAgent:
         from datetime import date as date_cls
         today = date_cls.today()
         if self.readiness_entity:
-            system = WELLNESS_CHECK_READINESS_PROMPT.format(today=today.isoformat())
+            system = WELLNESS_CHECK_READINESS_PROMPT.format(
+                today=today.isoformat(), memory_context=self.memory_block("wellness"))
             wellness_tools = _WELLNESS_READINESS_TOOLS
         else:
             hrv_context = (
@@ -1402,6 +1452,7 @@ class TrainingAgent:
             )
             system = WELLNESS_CHECK_SYSTEM_PROMPT.format(
                 today=today.isoformat(),
+                memory_context=self.memory_block("wellness"),
                 hrv_context=hrv_context,
                 rhr_context=rhr_context,
                 hrv_min=self.hrv_min or 0,
