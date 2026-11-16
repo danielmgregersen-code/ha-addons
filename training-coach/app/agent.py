@@ -2,7 +2,7 @@ import json
 from openai import OpenAI
 from intervals import IntervalsClient
 from homeassistant import HAClient
-from memory import MEMORY_SENTINEL, MEMORY_USAGE_INSTRUCTIONS
+from memory import MEMORY_SENTINEL, MEMORY_USAGE_INSTRUCTIONS, execution_sentence
 
 
 def _readiness_band(score: float) -> str:
@@ -502,6 +502,7 @@ For MATCHED workouts (compliance > 0): focus on interval execution — did effor
 For UNMATCHED rides: equal weight to interval efforts and zone distribution.
 
 Auto-detected intervals capture only the hard efforts the device flagged. Gaps between detected intervals are NOT necessarily recovery — never assume or label them as such. Describe what the metrics show (power, HR, intensity_pct) rather than inferring a structure that may not exist.
+When the user message supplies measured execution for this ride, those numbers were computed from the device intervals against the workout this add-on planned — treat them as given and do not contradict them with your own count. When it says execution could not be established, do not guess at one.
 
 When posting via post_activity_comment, always include a coach_tick reflecting session quality:
 1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing — based on TSS vs expected, RPE, feel, interval execution, and decoupling.
@@ -541,6 +542,7 @@ Analysis rules:
 - For UNMATCHED rides (compliance null or 0): equal weight to interval efforts and zone distribution — both tell the full story
 - Auto-detected intervals capture only the hard efforts the device flagged. Gaps between detected intervals are NOT necessarily recovery — never label them as such unless low power/HR/intensity_pct actually supports it. Describe what the data shows, not assumed structure
 - When analysing intervals, comment on consistency across efforts, power/HR drift, and whether targets were met
+- For PAST sessions, memory's `ex` tags already state reps completed, targets hit and fade — read them rather than fetching intervals for every ride in a multi-ride discussion. Fetch intervals only for the one ride being examined in depth
 - When posting a comment: fetch coach ticks first, select the most appropriate tick based on session quality (1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing) using TSS vs expected load, RPE, feel, interval execution, and decoupling as inputs. If the coach_ticks list is empty, post the comment without a tick_id
 - When judging a group ride for a coach tick, hold it to the athlete's configured group ride intensity. Do not mark it down for unstructured pacing or a high variability index — that is the nature of riding in a bunch
 
@@ -648,6 +650,7 @@ Guidelines:
 - Weeks start on Monday (European standard)
 - Confirm with the athlete before making changes to the calendar
 - Consider cumulative fatigue before adding hard sessions
+- Consider interval execution, not just load: when memory shows reps routinely cut short or targets missed at a given duration, shorten the reps or lower the target before adding more of them
 - When the plan is complete (all workouts created/updated and all weekly notes written for the requested period), respond immediately with a brief human-readable summary and stop. Do NOT call get_planned_workouts or any other tool after writing the final note — trust that no-error responses mean the calendar is correct. Re-verification loops make unwanted changes.
 - Write each day's workout exactly once, batching all create/update calls together. Do NOT revise a workout you have already written earlier in this same turn — get it right the first time. Fewer, single-pass writes keep the request fast and avoid timeouts.
 
@@ -729,7 +732,7 @@ Steps:
 Structure your recap as follows:
 ## Week in review — {today}
 **Load:** total TSS and hours for the week vs the {max_tss} TSS / {max_hours} h target.
-**Sessions:** bullet per session — date, name, brief description of what it was and how it went (compliance, RPE, feel). Flag any sessions that were missed or significantly under/over target. An activity with group_ride=true is a group ride: judge it against the group ride intensity above, and never flag it as under-target for lacking interval structure.
+**Sessions:** bullet per session — date, name, brief description of what it was and how it went (compliance, RPE, feel). State interval execution from memory where a session is tagged, rather than re-deriving it. Flag any sessions that were missed or significantly under/over target. An activity with group_ride=true is a group ride: judge it against the group ride intensity above, and never flag it as under-target for lacking interval structure.
 **Wellness trend:** HRV and RHR over the week relative to athlete baselines. Count how many hard sessions the week actually contained against the target of {hard_intervals_per_week} — a group ride counts as a hard session only when the configured group ride intensity says it consumes one. Note any suppressed days and whether they aligned with those hard sessions.
 **Highlights:** 1-2 standout positives from the week.
 **Concerns:** any patterns worth watching (chronic underperformance, signs of fatigue, compliance issues).
@@ -1346,7 +1349,7 @@ class TrainingAgent:
         ]
         return reply, new_history, usage
 
-    def auto_review(self, activity: dict) -> tuple[str, dict]:
+    def auto_review(self, activity: dict, execution: dict = None) -> tuple[str, dict]:
         """Generate a coach review for a newly uploaded activity. Returns (comment, token_usage)."""
         from datetime import date as date_cls
         paired_event_id = activity.get("paired_event_id")
@@ -1358,6 +1361,9 @@ class TrainingAgent:
             if paired_event_id else
             "Fetch the activity intervals with get_activity_intervals for a full breakdown."
         )
+        measured = execution_sentence(execution)
+        if measured:
+            planned_instruction += " " + measured
         # Name the sport explicitly: this path knows it server-side, so the model
         # never has to infer it to pick the right thresholds.
         sport = activity.get("type") or "unknown"

@@ -12,7 +12,8 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from agent import TrainingAgent, group_ride_factors_from_options
 from chains import ChainManager, infer_condition, CONDITION_MULTIPLIERS
-from memory import MemoryStore, extract_memo, judge_planned, recap_target_monday
+from memory import (MemoryStore, compare_execution, extract_memo, judge_planned,
+                    recap_target_monday)
 
 OPTIONS_FILE = "/data/options.json"
 
@@ -34,7 +35,11 @@ WELLNESS_STATE_FILE = f"{STORAGE_DIR}/wellness_state.json"
 AUTOMATION_POLL_SECONDS = 600  # 10-minute check interval for scheduled automations
 MEMORY_SWEEP_STATE_FILE = f"{STORAGE_DIR}/memory_sweep_state.json"
 MEMORY_BACKFILL_DAYS = 180   # one HTTP request, parsed in Python, never entering a prompt
-MEMORY_SWEEP_EVENT_DAYS = 60
+# Events must reach as far back as activities, or the older half of the backfill
+# has no plans to compare against.
+MEMORY_SWEEP_EVENT_DAYS = 180
+MEMORY_EXEC_PER_POLL = 10     # drip rate; a backfill queue drains in ~25 minutes
+MEMORY_EXEC_DAILY_CAP = 60    # a bug here must not become an API hammer
 
 chain_manager = ChainManager()
 memory_store = MemoryStore()
@@ -386,6 +391,78 @@ async def wellness_check_loop():
             print(f"Wellness check error: {e}", flush=True)
 
 
+_exec_budget = {"date": None, "used": 0}
+
+
+def _exec_budget_available() -> bool:
+    """Per-day cap on interval fetches. The guard in needs_execution should make
+    this unreachable; it exists so a bug cannot turn a 120-second loop into an API
+    hammer."""
+    today = date.today().isoformat()
+    if _exec_budget["date"] != today:
+        _exec_budget.update(date=today, used=0)
+    if _exec_budget["used"] >= MEMORY_EXEC_DAILY_CAP:
+        return False
+    _exec_budget["used"] += 1
+    return True
+
+
+def _ftp_for(sport_type):
+    """Today's FTP for a sport, used only as a fallback — intensity_pct on the
+    interval already carries the FTP in force when the session was ridden."""
+    try:
+        athlete = agent.icu.get_athlete()
+    except Exception:
+        return None
+    for entry in athlete.get("sport_settings") or []:
+        if sport_type in (entry.get("sports") or []):
+            return entry.get("ftp")
+    return None
+
+
+def _execution_for(activity) -> None:
+    """Measure interval execution for one activity. One GET, heavily gated.
+
+    Placed beside the memory upsert and before the auto-review gates, because a
+    session with no RPE still deserves to have its intervals measured — the gates
+    exist for the LLM review, not for arithmetic.
+    """
+    aid = str(activity.get("id") or "")
+    if not aid or activity.get("group_ride"):
+        return   # a bunch ride is not judged against intervals nobody planned
+    if not memory_store.needs_execution(aid, tss=activity.get("tss")):
+        return
+    if not _exec_budget_available():
+        return
+    try:
+        payload = agent.icu.get_activity_intervals(aid)
+    except Exception as e:
+        memory_store.mark_execution_attempt(aid)
+        print(f"Execution fetch error for {aid}: {e}", flush=True)
+        return
+    event_id = activity.get("paired_event_id")
+    plan = memory_store.plan_for_event(event_id)
+    ftp = None
+    if plan and any(s.get("band", {}) and s["band"].get("unit") == "pct"
+                    for s in plan.get("sets") or []):
+        ftp = _ftp_for(activity.get("type"))
+    record = compare_execution(plan, payload, ftp=ftp, trainer=bool(activity.get("trainer")))
+    record["tss"] = activity.get("tss")
+    if event_id:
+        record["event_id"] = str(event_id)
+    memory_store.set_execution(aid, record)
+
+
+def _drain_execution_queue() -> None:
+    """Measure backfilled sessions a few at a time. The ride loop only ever sees
+    the last 14 days, so the older months need their own queue — dripped rather
+    than burst so a six-month backfill never fires 100 requests at once."""
+    for aid in memory_store.sessions_needing_execution(MEMORY_EXEC_PER_POLL):
+        session = next((s for s in memory_store.live_sessions() if s["id"] == aid), None)
+        if session:
+            _execution_for({**session, "id": aid})
+
+
 def _memory_sweep(activities):
     """Backfill once, then judge past planned workouts and reconcile deletions.
 
@@ -398,6 +475,7 @@ def _memory_sweep(activities):
                                                max_days_back=MEMORY_BACKFILL_DAYS,
                                                group_keywords=agent.group_ride_keywords)
             past = agent.icu.get_events(days_ahead=0, days_back=MEMORY_SWEEP_EVENT_DAYS)
+            memory_store.record_plans(past)
             count = memory_store.backfill(history, past)
             print(f"Training memory backfilled: {count} sessions over "
                   f"{MEMORY_BACKFILL_DAYS} days.", flush=True)
@@ -412,6 +490,9 @@ def _memory_sweep(activities):
         # seven days stale in the wellness prompt that reads it every morning.
         past = agent.icu.get_events(days_ahead=0, days_back=14)
         sessions = memory_store.live_sessions()
+        # Plans are recorded without the done/skipped grace window: a ride that
+        # uploaded today needs its plan available now, not in two days.
+        memory_store.record_plans(past)
         memory_store.record_planned(judge_planned(past, sessions, date.today()))
         if activities:
             since = min((a.get("date") or "9999") for a in activities)
@@ -471,6 +552,7 @@ async def auto_review_loop():
                 # activities that have RPE and feel and no tick — a small minority.
                 try:
                     memory_store.upsert_session(activity)
+                    _execution_for(activity)
                 except Exception as e:
                     print(f"Memory upsert error for {activity.get('id')}: {e}", flush=True)
 
@@ -479,7 +561,8 @@ async def auto_review_loop():
                 if not activity.get("rpe") or not activity.get("feel"):
                     continue
                 print(f"Auto-reviewing: {activity.get('name')} ({activity.get('id')})", flush=True)
-                comment, usage = agent.auto_review(activity)
+                comment, usage = agent.auto_review(
+                    activity, execution=memory_store.execution_for(activity["id"]))
                 accumulate_tokens(usage)
                 # Strip the marker before the comment reaches the notification, the
                 # push or the chat: the frontend only strips [[PROPOSE_*]].
@@ -528,6 +611,7 @@ async def auto_review_loop():
             # Must run after the ride loop: the fetch above is what populates the
             # window the sweep cross-references.
             _memory_sweep(new_activities)
+            _drain_execution_queue()
         except Exception as e:
             print(f"Auto-review error: {e}", flush=True)
 

@@ -141,3 +141,39 @@ class TestCacheFreshness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExecutionInPrompts(unittest.TestCase):
+    """The measured numbers must reach the auto-review, since that is the one call
+    that writes the prose verdict for the ride."""
+
+    def test_measured_execution_reaches_the_auto_review(self):
+        agent = make_agent(memory=make_store())
+        record = {"basis": "plan", "reps_done": 2, "reps_planned": 3,
+                  "target_hit": 1, "target_rel": 94, "fade_pct": -6.1}
+        seen = {}
+
+        def fake_loop(**kwargs):
+            seen["input"] = kwargs["input_items"]
+            return ("ok", {})
+
+        agent._run_response_loop = fake_loop
+        agent.auto_review({"id": "i1", "type": "Ride", "paired_event_id": 77},
+                          execution=record)
+        user_message = seen["input"][-1]["content"]
+        self.assertIn("2 of 3 reps", user_message)
+        self.assertIn("Treat these as given", user_message)
+
+    def test_an_unestablished_measurement_says_so(self):
+        agent = make_agent(memory=make_store())
+        seen = {}
+        agent._run_response_loop = lambda **kw: (seen.update(input=kw["input_items"]), ("ok", {}))[1]
+        agent.auto_review({"id": "i1", "type": "Ride", "paired_event_id": 77},
+                          execution={"basis": "unclear", "reason": "split_or_merged"})
+        self.assertIn("not established", seen["input"][-1]["content"])
+
+    def test_auto_review_still_works_without_a_measurement(self):
+        """Purely additive: the existing one-argument call must keep working."""
+        agent = make_agent(memory=make_store())
+        self.assertIn("TRAINING MEMORY",
+                      captured_system(agent, lambda: agent.auto_review({"id": "i1", "type": "Ride"})))
