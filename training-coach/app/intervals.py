@@ -231,6 +231,9 @@ class IntervalsClient:
             simplified.append({
                 "type": iv.get("type"),
                 "group_id": iv.get("group_id"),
+                # Ordering anchor: every time field is dropped below, so without
+                # this, fade across reps would depend on the API's own ordering.
+                "start_index": iv.get("start_index"),
                 "duration_seconds": iv.get("moving_time"),
                 "distance_meters": round(iv.get("distance") or 0, 1),
                 "avg_power": iv.get("average_watts"),

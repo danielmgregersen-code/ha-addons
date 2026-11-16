@@ -54,7 +54,12 @@ calendar and races, the athlete's thresholds and coach ticks, the existing weekl
 one, and any session from the last 48 hours whose detail matters (use get_recent_activities(days_back=3),
 not more). When memory and a live fetch disagree, the live fetch wins and memory is wrong. Never add an
 estimated TSS for a ride memory already reports as completed, and do not quote the block back to the
-athlete as if it were fresh analysis."""
+athlete as if it were fresh analysis.
+Lines headed "Interval execution" and session tags like "ex 3/3 @97% fade -6%" are measured by this
+add-on from the device's own intervals against the workout it wrote — they are the record of interval
+execution; do not call get_activity_intervals to re-derive a session memory already states. A session
+with NO such tag was unstructured, a group ride, or could not be measured — never read a missing tag
+as a missed session."""
 
 
 # ── Pure helpers ──
@@ -164,6 +169,322 @@ def planned_record_from_event(event: dict):
     }
 
 
+# ── Interval execution: was the prescribed workout actually done? ──
+# TSS and compliance cannot answer this. compliance is Intervals.icu's load/time
+# match score and this codebase only ever asks `> 0`; a 5x4 session with three
+# reps done and tempo afterwards scores the same TSS as one executed properly.
+#
+# The planned structure is free text, but it is text THIS add-on wrote, in the
+# format the planning prompt mandates. Its "Press lap" convention exists so device
+# lap markers land on the prescribed step boundaries — that alignment is what makes
+# rep-for-rep comparison possible, and its absence is what makes it unreliable.
+#
+# Known limitation: the first computation wins. If the planned description is
+# edited afterwards the stored verdict is not revisited; exec.event_id records
+# which plan was used so it stays traceable.
+
+_STEP_RE = re.compile(r"^\s*[-*\u2022]\s*(.+?)\s*$")
+_REPEAT_TAIL_RE = re.compile(r"(?:^|\s)(\d{1,2})\s*x\s*$", re.I)   # "Main set 3x"
+_REPEAT_ANY_RE = re.compile(r"(?<![\w])(\d{1,2})\s*x", re.I)        # "2x20" -> refuse
+_RECOVERY_RE = re.compile(
+    r"\b(press\s*lap|recover(y|ies)?|rest|easy|spin|float|"
+    r"cool\s*down|cooldown|warm\s*up|warmup)\b", re.I)
+_RAMP_RE = re.compile(r"\bramp\b", re.I)
+
+# Durations. The lookbehind rejects a number glued to a previous token, which is
+# what stops "90 rpm" reading as 90 minutes and "20-30m" as 30 minutes.
+_DUR_PATTERNS = (
+    (re.compile(r"(?<![\w%.\-])(\d+)h(\d+)m(\d+)s(?![\w%])", re.I), (3600, 60, 1)),
+    (re.compile(r"(?<![\w%.\-])(\d+)h(\d+)m?(?![\w%])", re.I), (3600, 60)),
+    (re.compile(r"(?<![\w%.\-])(\d+)h(?![\w%])", re.I), (3600,)),
+    (re.compile(r"(?<![\w%.\-])(\d+)m(\d+)s?(?![\w%])", re.I), (60, 1)),       # 1m30
+    (re.compile(r"(?<![\w%.\-])(\d+)(?:min|mins|m)(?![\w%])", re.I), (60,)),
+    (re.compile(r"(?<![\w%.\-])(\d+)(?:sec|secs|s)(?![\w%])", re.I), (1,)),
+    (re.compile(r"(?<![\w%.\-])(\d+):([0-5]\d)(?![\w%:])"), (60, 1)),
+)
+# The qualifier after % is load-bearing: bare % and "% FTP" are power, "% HR" and
+# "% LTHR" are not. A 60% HR step read as 60% FTP becomes a missed sweetspot rep.
+_PCT_RE = re.compile(
+    r"(?<![\w.\-])(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*%\s*"
+    r"(lthr|hrr|hr|ftp|mhr|max\s*hr|pace)?", re.I)
+_W_RE = re.compile(r"(?<![\w.\-])(\d{2,4})(?:\s*-\s*(\d{2,4}))?\s*w(?:atts)?(?![\w])", re.I)
+
+WORK_FLOOR_PCT = 72       # a step inside a repeat below this is recovery, whatever it is called
+SOLO_FLOOR_PCT = 85       # a step outside a repeat must be this hard to count as a one-rep set
+SOLO_MIN_SECONDS = 300
+TARGET_TOL_PCT = 2        # ~5 W at 250 FTP — inside a power meter's own accuracy
+WORK_TIME_TOL = 0.12      # total work time agreeing this closely means laps, not missed reps
+SHORT_REP_FLOOR = 10      # seconds of lap-press slop forgiven on any rep length
+
+
+def _duration_seconds(text: str):
+    """(seconds, offset) of the first duration token, or (None, None)."""
+    best = None
+    for pattern, mult in _DUR_PATTERNS:
+        m = pattern.search(text)
+        if not m:
+            continue
+        key = (m.start(), -(m.end() - m.start()))   # earliest, then longest
+        if best is None or key < best[0]:
+            best = (key, sum(k * int(g) for k, g in zip(mult, m.groups()) if g), m.start())
+    return (None, None) if best is None else (best[1], best[2])
+
+
+def _power_target(text: str):
+    """The POWER band of a step, or None for heart-rate, pace and cadence targets."""
+    ramp = bool(_RAMP_RE.search(text))
+    for m in _PCT_RE.finditer(text):
+        qualifier = (m.group(3) or "").lower().replace(" ", "")
+        if qualifier in ("", "ftp"):
+            lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+            return {"unit": "pct", "low": min(lo, hi), "high": max(lo, hi), "ramp": ramp}
+    m = _W_RE.search(text)
+    if m:
+        lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+        return {"unit": "w", "low": min(lo, hi), "high": max(lo, hi), "ramp": ramp}
+    return None
+
+
+def parse_planned_workout(description):
+    """Normalise a planned workout written in this add-on's format, or None.
+
+    Returning None rather than a guess is the whole point: a wrong parse becomes a
+    confident "you missed two reps" in a coach note months later, which is worse
+    than having no feature at all.
+
+    An empty `sets` list is a THIRD outcome, distinct from None — the format was
+    recognised but holds nothing rep-shaped to judge (an endurance ride).
+    """
+    if not isinstance(description, str) or not description.strip():
+        return None
+    blocks, current, pending_reps = [], None, 1
+    steps_total = unparsed = 0
+
+    for raw in description.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        match = _STEP_RE.match(line)
+        if match:
+            body = match.group(1)
+            steps_total += 1
+            seconds, offset = _duration_seconds(body)
+            if seconds is None:
+                unparsed += 1          # a bullet with no duration is not a step
+                continue
+            if current is None:
+                current = {"reps": pending_reps, "steps": []}
+                blocks.append(current)
+            current["steps"].append({
+                "label": body[:offset].strip(" -:"),
+                "seconds": seconds,
+                "target": _power_target(body[offset:]) or _power_target(body),
+            })
+            continue
+
+        current = None                 # a header closes the open block
+        tail = _REPEAT_TAIL_RE.search(line)
+        if tail:
+            pending_reps = int(tail.group(1))
+        elif _REPEAT_ANY_RE.search(line):
+            return None                # "2x20", "3 x 10m": the rep count is ambiguous
+        else:
+            pending_reps = 1
+
+    if steps_total == 0 or unparsed * 4 > steps_total:
+        return None                    # prose, or a markdown bullet list
+
+    sets, warnings = [], []
+    for block in blocks:
+        work, ambiguous = [], False
+        for step in block["steps"]:
+            target = step["target"]
+            if _RECOVERY_RE.search(step["label"]):
+                if target and target["unit"] == "pct" and target["high"] >= 88:
+                    ambiguous = True   # "Recovery" at 90% is a contradiction we won't resolve
+                continue
+            if target and target["unit"] == "pct" and target["high"] < WORK_FLOOR_PCT:
+                continue               # recovery by intensity, whatever the label says
+            work.append(step)
+        if not work:
+            continue
+        if block["reps"] < 2:
+            # Not a repeat block. Admit a one-rep set only when it is unmistakably
+            # an effort, or every warmup becomes a "missed rep".
+            target = work[0]["target"]
+            if (len(work) > 1 or not target or target["unit"] != "pct"
+                    or target["low"] < SOLO_FLOOR_PCT
+                    or work[0]["seconds"] < SOLO_MIN_SECONDS):
+                continue
+        if len(work) > 1:
+            ambiguous = True           # over-unders: one rep is not one effort
+            warnings.append("ambiguous_set")
+        longest = max(work, key=lambda s: s["seconds"])
+        sets.append({
+            "reps": block["reps"],
+            "label": (work[0]["label"] or "").strip() or None,
+            "work_seconds": sum(s["seconds"] for s in work),
+            "steps": len(work),
+            "band": longest["target"],
+            "ambiguous": ambiguous,
+        })
+    return {"format": "addon", "sets": sets,
+            "reps_planned": sum(s["reps"] for s in sets),
+            "warnings": sorted(set(warnings))}
+
+
+def _work_intervals(payload):
+    """Candidate work efforts, in time order. Falls back to every interval when the
+    API labelled none, and sorts by start_index when present — get_activity_intervals
+    drops the time fields, so fade would otherwise depend on API ordering."""
+    intervals = (payload or {}).get("intervals") or []
+    work = [i for i in intervals if (i.get("type") or "").upper() == "WORK"] or list(intervals)
+    if all(i.get("start_index") is not None for i in work):
+        work = sorted(work, key=lambda i: i["start_index"])
+    return work
+
+
+def _rep_pct(interval, ftp):
+    """A rep's intensity as % FTP. intensity_pct is preferred because it carries the
+    FTP in force AT THE TIME — decisive when judging a six-month backfill against
+    today's threshold."""
+    pct = interval.get("intensity_pct")
+    if pct:
+        value = _num(pct, 1)
+        if value:
+            return value * 100 if value <= 3 else value
+    power = interval.get("avg_power") or interval.get("normalized_power")
+    if power and ftp:
+        return round(power / ftp * 100, 1)
+    return None
+
+
+def compare_execution(plan, payload, ftp=None, trainer=False):
+    """Measure how a session was executed against its plan.
+
+    Returns a dict whose `basis` says how far the measurement can be trusted:
+      plan        — reps compared against a parsed plan
+      unclear     — a plan existed but the detected efforts did not line up with it
+      actual_only — no usable plan; the actual side only, no claim about a plan
+      none        — nothing to judge
+
+    The `unclear` path is the point of the whole function. When the rep COUNT
+    disagrees but the total work TIME agrees, the same work was done in a different
+    number of pieces — a lap pressed late, two reps merged, one split — and no rep
+    shortfall is reported at all. A wrong "you missed two reps" is worse than silence.
+    """
+    out = {"v": 1, "erg": bool(trainer)}
+    efforts = _work_intervals(payload)
+    if not efforts:
+        return {**out, "basis": "none", "reason": "no_intervals"}
+
+    sets = (plan or {}).get("sets") or []
+    if not sets:
+        durations = [_num(i.get("duration_seconds")) or 0 for i in efforts]
+        pcts = [p for p in (_rep_pct(i, ftp) for i in efforts) if p]
+        result = {**out, "basis": "actual_only", "efforts": len(efforts),
+                  "work_min": round(sum(durations) / 60),
+                  "median_min": round((_median(durations) or 0) / 60, 1),
+                  "median_pct": round(_median(pcts)) if pcts else None}
+        # Fade only when the efforts actually look like a set.
+        if len(efforts) >= 3 and durations and _median(durations):
+            spread = max(durations) - min(durations)
+            if spread / (_median(durations) or 1) < 0.5:
+                result["fade_pct"] = _fade(efforts)
+        return result
+
+    reps_planned = plan["reps_planned"]
+    per_rep = _median([s["work_seconds"] for s in sets]) or 0
+    pool = [i for i in efforts
+            if per_rep and 0.40 * per_rep <= (_num(i.get("duration_seconds")) or 0) <= 2.50 * per_rep]
+    if not pool:
+        return {**out, "basis": "unclear", "reason": "no_matching_efforts",
+                "reps_planned": reps_planned, "efforts": len(efforts)}
+
+    # Prefer Intervals.icu's own repeat-set grouping: it decided these are one set.
+    match = "filtered"
+    groups = (payload or {}).get("groups") or []
+    for group in groups:
+        if group.get("count") == reps_planned:
+            members = [i for i in pool if i.get("group_id") == group.get("group_id")]
+            if len(members) == reps_planned:
+                pool, match = members, "group"
+                break
+    else:
+        if len(pool) == reps_planned:
+            match = "count"
+
+    planned_work = sum(s["reps"] * s["work_seconds"] for s in sets)
+    actual_work = sum(_num(i.get("duration_seconds")) or 0 for i in pool)
+    if len(pool) != reps_planned and planned_work:
+        if abs(actual_work - planned_work) / planned_work <= WORK_TIME_TOL:
+            # Same work, different number of pieces. Say nothing about reps.
+            return {**out, "basis": "unclear", "reason": "split_or_merged",
+                    "reps_planned": reps_planned, "efforts": len(pool),
+                    "work_min": round(actual_work / 60)}
+    if any(s["ambiguous"] for s in sets):
+        return {**out, "basis": "unclear", "reason": "ambiguous_set",
+                "reps_planned": reps_planned, "efforts": len(pool),
+                "work_min": round(actual_work / 60)}
+
+    band = sets[0]["band"] if len(sets) == 1 else None
+    hits = unknown = 0
+    for interval in pool:
+        if not band or band.get("ramp"):
+            continue
+        if band["unit"] == "pct":
+            value = _rep_pct(interval, ftp)
+        else:
+            value = _num(interval.get("avg_power"))
+        if value is None:
+            unknown += 1
+            continue
+        if band["low"] - TARGET_TOL_PCT <= value <= band["high"] + TARGET_TOL_PCT:
+            hits += 1
+
+    short = 0
+    for interval, expected in zip(pool, _expected_durations(sets)):
+        actual = _num(interval.get("duration_seconds")) or 0
+        if actual < expected - max(SHORT_REP_FLOOR, 0.10 * expected):
+            short += 1
+
+    result = {**out, "basis": "plan", "match": match,
+              "reps_planned": reps_planned, "reps_done": len(pool),
+              "short_reps": short, "work_min": round(actual_work / 60),
+              "label": sets[0]["label"]}
+    if band and not band.get("ramp") and unknown * 3 <= len(pool):
+        result["target_hit"] = hits
+        midpoint = (band["low"] + band["high"]) / 2
+        values = [v for v in ((_rep_pct(i, ftp) if band["unit"] == "pct"
+                               else _num(i.get("avg_power"))) for i in pool) if v]
+        if values and midpoint:
+            result["target_rel"] = round((_median(values) or 0) / midpoint * 100)
+    fade = _fade(pool)
+    if fade is not None:
+        result["fade_pct"] = fade
+    return result
+
+
+def _expected_durations(sets):
+    """Prescribed duration per rep, flattened in order."""
+    out = []
+    for item in sets:
+        out.extend([item["work_seconds"]] * item["reps"])
+    return out
+
+
+def _fade(efforts):
+    """First rep versus last, as a percentage. Negative means faded.
+
+    Within one set only and only from three reps up: across sets it would compare a
+    VO2 rep to a threshold rep and call the athlete inconsistent.
+    """
+    powers = [_num(i.get("avg_power")) for i in efforts]
+    if len(powers) < 3 or not all(powers) or not powers[0]:
+        return None
+    return round((powers[-1] / powers[0] - 1) * 100, 1)
+
+
 def is_hard_session(session: dict, group_ride_is_hard: bool) -> bool:
     """Whether a session spends a hard-interval slot.
 
@@ -264,6 +585,57 @@ def _fmt(value, suffix="", nd=None):
     if nd is not None:
         return f"{value:.{nd}f}{suffix}"
     return f"{value:g}{suffix}"
+
+
+def execution_sentence(record) -> str:
+    """Plain-language execution facts for the auto-review's user message, or "".
+
+    When the measurement could not be trusted this says so outright, which is what
+    stops the model inventing a verdict the numbers do not support.
+    """
+    if not record:
+        return ""
+    basis = record.get("basis")
+    if basis == "unclear":
+        return ("The detected intervals did not line up with the planned structure "
+                "(likely lap presses, not missed work), so rep counts are not "
+                "established for this ride — do not state one.")
+    if basis != "plan":
+        return ""
+    bits = [f"{record.get('reps_done')} of {record.get('reps_planned')} reps"]
+    if record.get("target_hit") is not None:
+        bits.append(f"{record['target_hit']} on target"
+                    + (f" (median {record['target_rel']}% of the band)"
+                       if record.get("target_rel") else ""))
+    if record.get("fade_pct") is not None:
+        bits.append(f"fade {record['fade_pct']:+g}% first to last")
+    if record.get("short_reps"):
+        bits.append(f"{record['short_reps']} rep(s) cut short")
+    sentence = ("Measured execution for this ride, computed by the add-on from the device "
+                "intervals against the workout it planned: " + ", ".join(bits) + ".")
+    if record.get("erg"):
+        sentence += (" Ridden on a trainer, so hitting the target is the trainer's doing — "
+                     "judge fade and completion, not target accuracy.")
+    return sentence + " Treat these as given; call get_activity_intervals only for detail beyond them."
+
+
+def _exec_tag(record) -> str:
+    """Short execution tag for a session line, or "" when nothing is established.
+
+    Only `basis: plan` is tagged. An actual_only or unclear record renders nothing
+    rather than half a claim — and the usage instructions tell the model that a
+    missing tag means unmeasured, never a missed session.
+    """
+    if not record or record.get("basis") != "plan":
+        return ""
+    bits = [f"{record.get('reps_done')}/{record.get('reps_planned')}"]
+    if record.get("target_rel") is not None:
+        bits.append(f"@{record['target_rel']}%")
+    if record.get("fade_pct") is not None:
+        bits.append(f"fade {record['fade_pct']:+g}%")
+    if record.get("short_reps"):
+        bits.append(f"{record['short_reps']} short")
+    return " ex " + " ".join(bits)
 
 
 # ── Store ──
@@ -380,6 +752,104 @@ class MemoryStore:
             session["note_ts"] = datetime.now().isoformat(timespec="seconds")
             self._save()
             return True
+
+    def set_execution(self, activity_id, data: dict) -> bool:
+        """Store a measured execution record. Same change gate as set_note, because
+        this runs inside the 120-second loop."""
+        if not data:
+            return False
+        sid = str(activity_id)
+        with self._lock:
+            session = self._data["sessions"].setdefault(
+                sid, {"id": sid, "source": "live", "deleted": False})
+            current = session.get("exec") or {}
+            if {k: v for k, v in current.items() if k != "ts"} == \
+               {k: v for k, v in data.items() if k != "ts"}:
+                return False
+            session["exec"] = {**data, "ts": datetime.now().isoformat(timespec="seconds")}
+            self._save()
+            return True
+
+    def execution_for(self, activity_id):
+        with self._lock:
+            return (self._data["sessions"].get(str(activity_id)) or {}).get("exec")
+
+    def needs_execution(self, activity_id, tss=None) -> bool:
+        """Whether this session still wants an interval fetch.
+
+        The loop re-sees the same fortnight every 120 seconds, so this must be a
+        dict lookup that says no almost always. It says yes again when the TSS
+        moved, which is how a re-uploaded or re-cut activity self-heals.
+        """
+        with self._lock:
+            session = self._data["sessions"].get(str(activity_id))
+            if not session:
+                return True
+            record = session.get("exec")
+            if not record:
+                return True
+            if record.get("basis") == "pending":
+                return (record.get("attempts") or 0) < 3
+            stored_tss = record.get("tss")
+            current = _num(tss)
+            return bool(stored_tss is not None and current is not None
+                        and abs(stored_tss - current) > 2)
+
+    def mark_execution_attempt(self, activity_id) -> None:
+        """Record a failed fetch. After three tries it settles as unmeasurable
+        rather than retrying every two minutes forever."""
+        sid = str(activity_id)
+        with self._lock:
+            session = self._data["sessions"].setdefault(
+                sid, {"id": sid, "source": "live", "deleted": False})
+            record = session.get("exec") or {"v": 1, "basis": "pending", "attempts": 0}
+            attempts = (record.get("attempts") or 0) + 1
+            session["exec"] = ({"v": 1, "basis": "none", "reason": "fetch_failed"}
+                               if attempts >= 3 else
+                               {"v": 1, "basis": "pending", "attempts": attempts})
+            self._save()
+
+    def sessions_needing_execution(self, limit: int = 10):
+        """Ids worth fetching, newest first — the loop's own 14-day window cannot
+        see the backfilled months, so the drip needs its own queue."""
+        with self._lock:
+            pending = [s for s in self._live_sessions()
+                       if not s.get("group_ride") and (
+                           not s.get("exec")
+                           or (s.get("exec", {}).get("basis") == "pending"
+                               and (s["exec"].get("attempts") or 0) < 3))]
+        return [s["id"] for s in reversed(pending)][:limit]
+
+    def record_plans(self, events) -> bool:
+        """Store the parsed plan for each planned workout.
+
+        Separate from record_planned because that one judges done/skipped and so
+        deliberately ignores anything inside a two-day grace window — which would
+        mean the plan for a ride that just uploaded is never available.
+        """
+        changed = False
+        with self._lock:
+            for event in events or []:
+                rec = planned_record_from_event(event)
+                if rec is None:
+                    continue
+                plan = parse_planned_workout(event.get("description"))
+                entry = dict(self._data["planned"].get(rec["id"]) or {})
+                merged = {**entry, **rec}
+                if plan is not None:
+                    merged["plan"] = plan
+                if merged != entry:
+                    self._data["planned"][rec["id"]] = merged
+                    changed = True
+            if changed:
+                self._save()
+        return changed
+
+    def plan_for_event(self, event_id):
+        if not event_id:
+            return None
+        with self._lock:
+            return (self._data["planned"].get(str(event_id)) or {}).get("plan")
 
     def set_week_summary(self, monday: str, summary: str, recap_text: str = None) -> bool:
         summary = " ".join((summary or "").split())
@@ -605,7 +1075,13 @@ class MemoryStore:
         return (f"TRAINING MEMORY — recorded by this add-on from your own completed sessions. "
                 f"Coverage {cov} → now (as of {as_of}).{extra}")
 
-    def _week_rows(self, mondays, group_ride_is_hard, with_prose=0, max_hours=None, max_tss=None):
+    @staticmethod
+    def _exec_records(sessions):
+        return [s["exec"] for s in sessions
+                if (s.get("exec") or {}).get("basis") == "plan"]
+
+    def _week_rows(self, mondays, group_ride_is_hard, with_prose=0, max_hours=None,
+                   max_tss=None, with_exec=False):
         rows = []
         for i, monday in enumerate(mondays):
             week = self._data["weeks"].get(monday) or {}
@@ -621,6 +1097,12 @@ class MemoryStore:
                 bits.append(f"{week['group_rides']} group")
             if week.get("skipped"):
                 bits.append(f"{week['skipped']} skipped")
+            if with_exec:
+                records = self._exec_records(sessions)
+                done = sum(r.get("reps_done") or 0 for r in records)
+                planned = sum(r.get("reps_planned") or 0 for r in records)
+                if planned:
+                    bits.append(f"reps {done}/{planned}")
             bits.append(f"RPE {_fmt(week.get('avg_rpe'))} feel {_fmt(week.get('avg_feel'))}")
             rows.append("  ".join([bits[0], " · ".join(bits[1:])]))
             if i < with_prose and week.get("summary"):
@@ -631,7 +1113,7 @@ class MemoryStore:
         mondays = sorted(self._data["weeks"])[-8:][::-1]
         lines = [self._header(" Authoritative for closed weeks; do not re-fetch them.")]
         lines += self._week_rows(mondays, group_ride_is_hard, with_prose=3,
-                                 max_hours=max_hours, max_tss=max_tss)
+                                 max_hours=max_hours, max_tss=max_tss, with_exec=True)
         recent = [self._data["weeks"].get(m, {}).get("tss") for m in mondays[::-1]]
         recent = [t for t in recent if t]
         if len(recent) >= 2:
@@ -641,24 +1123,80 @@ class MemoryStore:
         planned = sum(1 for p in self._data["planned"].values() if p.get("status"))
         if planned:
             lines.append(f"Planned sessions recorded: {planned}, of which {skipped} skipped")
+        window = {m for m in mondays}
+        in_window = [s for s in sessions if self._monday_for(s.get("date")) in window]
+        execution = self._execution_summary(in_window, len(mondays))
+        if execution:
+            lines.append(execution)
         lines.append("The last 48 h may be incomplete — call get_recent_activities(days_back=3) "
                      "if today's load matters.")
         return "\n".join(lines)
 
+    def _execution_summary(self, sessions, weeks):
+        """The pattern the planner needs: are reps being completed, are targets being
+        hit, is fade getting worse. This is what TSS alone could never show."""
+        records = self._exec_records(sessions)
+        if not records:
+            return ""
+        done = sum(r.get("reps_done") or 0 for r in records)
+        planned = sum(r.get("reps_planned") or 0 for r in records)
+        if not planned:
+            return ""
+        bits = [f"Interval execution ({weeks} wks, {len(records)} structured): reps {done}/{planned}"]
+        hits = [r for r in records if r.get("target_hit") is not None]
+        if hits:
+            on_target = sum(r["target_hit"] for r in hits)
+            attempted = sum(r.get("reps_done") or 0 for r in hits)
+            rel = _median([r.get("target_rel") for r in hits])
+            bits.append(f"on target {on_target}/{attempted}"
+                        + (f" (median {_fmt(rel)}% of band)" if rel else ""))
+        fades = [r["fade_pct"] for r in records if r.get("fade_pct") is not None]
+        if fades:
+            trend = ""
+            if len(fades) >= 6:
+                half = len(fades) // 2
+                older, newer = _avg(fades[:half]), _avg(fades[half:])
+                if older is not None and newer is not None:
+                    trend = (", worsening" if newer < older - 1
+                             else ", improving" if newer > older + 1 else ", steady")
+            bits.append(f"fade {_fmt(_avg(fades))}% first→last{trend}")
+        short = sum(r.get("short_reps") or 0 for r in records)
+        if short:
+            bits.append(f"{short} reps cut short")
+        return " · ".join(bits)
+
     def _render_review(self, sessions, group_ride_is_hard):
         tss = [s.get("tss") for s in sessions]
         mins = [s.get("duration_min") for s in sessions]
-        lines = [self._header(f" {len(sessions)} sessions recorded."),
-                 f"Your normals: median ride {_fmt(_median(mins))} min / {_fmt(_median(tss))} TSS"
-                 f" · decoupling typically {_fmt(_median([s.get('decoupling') for s in sessions]), '%', 1)}"
-                 f" (p10–p90 {_fmt(_pct([s.get('decoupling') for s in sessions], 0.1), '', 1)}–"
-                 f"{_fmt(_pct([s.get('decoupling') for s in sessions], 0.9), '', 1)})"
-                 f" · RPE median {_fmt(_median([s.get('rpe') for s in sessions]))}"
-                 f" · feel median {_fmt(_median([s.get('feel') for s in sessions]))}"]
+        decoupling = [s.get("decoupling") for s in sessions]
+        normals = f"Your normals: median ride {_fmt(_median(mins))} min / {_fmt(_median(tss))} TSS"
+        if _median(decoupling) is not None:
+            normals += (f" · decoupling typically {_fmt(_median(decoupling), '%', 1)}"
+                        f" (p10–p90 {_fmt(_pct(decoupling, 0.1), '', 1)}–"
+                        f"{_fmt(_pct(decoupling, 0.9), '', 1)})")
+        normals += (f" · RPE median {_fmt(_median([s.get('rpe') for s in sessions]))}"
+                    f" · feel median {_fmt(_median([s.get('feel') for s in sessions]))}")
+        lines = [self._header(f" {len(sessions)} sessions recorded."), normals]
+        records = self._exec_records(sessions)
+        if records:
+            done = sum(r.get("reps_done") or 0 for r in records)
+            planned = sum(r.get("reps_planned") or 0 for r in records)
+            hits = [r for r in records if r.get("target_hit") is not None]
+            norm = f" · intervals normally {done}/{planned} reps"
+            if hits:
+                on_target = sum(r["target_hit"] for r in hits)
+                attempted = sum(r.get("reps_done") or 0 for r in hits)
+                if attempted:
+                    norm += f", {round(on_target / attempted * 100)}% on target"
+            fades = [r["fade_pct"] for r in records if r.get("fade_pct") is not None]
+            if fades:
+                norm += f", fade {_fmt(_avg(fades))}%"
+            lines[-1] += norm
         for s in sessions[-5:][::-1]:
             lines.append(f"  {s.get('date', '')[5:]} {s.get('name') or s.get('type') or 'session'} "
                          f"{_fmt(s.get('duration_min'), 'm')}/{_fmt(s.get('tss'))} "
                          f"rpe{_fmt(s.get('rpe'))} feel{_fmt(s.get('feel'))}"
+                         + _exec_tag(s.get("exec"))
                          + (f" — {s['note']}" if s.get("note") else ""))
         return "\n".join(lines)
 

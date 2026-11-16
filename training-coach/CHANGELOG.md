@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.7.0
+
+- The coach now records **whether you actually did the intervals**. TSS could
+  never show this: a 5x4 session where you managed three reps and rode tempo
+  afterwards lands the same TSS as one you nailed.
+- For every structured session it measures reps completed vs. planned, whether
+  each rep hit its power target, fade from the first rep to the last, and
+  whether any reps were cut short — all from your device's own intervals,
+  compared against the workout the coach itself wrote.
+- Over time this becomes a pattern the planner can act on: if sweet spot keeps
+  getting cut short, it shortens the reps instead of adding more.
+- **It will not accuse you wrongly.** If you forgot to press lap, or the workout
+  wasn't written by the coach, it says the rep count could not be established
+  rather than claiming you missed reps. A session with no execution tag means
+  "not measured", never "missed".
+- Old sessions are measured too, dripped a few at a time so the first day after
+  the update doesn't hammer Intervals.icu. Costs no tokens — none of it is sent
+  to the model as raw data.
+- Indoor rides are flagged: on a trainer, hitting the target is the trainer's
+  doing, so the coach judges completion and fade instead.
+
 ## 1.6.0
 
 - The coach now has a **training memory**: a record of how your training actually
