@@ -101,7 +101,7 @@ When an A-priority race is within 8 weeks, the coach overrides the normal block 
 Stage races (multiple consecutive RACE_A events) are automatically detected and treated as a single block.
 
 ### Group ride handling
-The coach auto-detects group rides by keywords in activity names or tags. When planning a week it checks the calendar for upcoming events matching those keywords and asks you how each group ride should be treated — whether it counts as one of your hard interval sessions, and if so what type (VO2max, threshold, sweet spot, etc.). It also asks about any group rides not yet on the calendar. If a group ride turns out harder than expected (decoupling >8% or RPE ≥8) the following day's session is softened.
+The coach auto-detects group rides by keywords in activity names or tags. Rather than asking you to classify every ride, it applies the `group_ride_intensity` setting: only `hard` spends one of your weekly hard-interval sessions, while `easy` and `moderate` leave the full quota of structured sessions in place and keep the days either side easy. It estimates the ride's load from its duration and the configured intensity factor so the week can be budgeted around it, but never puts a planned workout on a group-ride day. Tell it a specific ride will be harder or easier and that overrides the default for that ride alone.
 
 ### Coach ticks
 Whenever the coach posts a comment it also sets a coach tick on the activity — 1 = Really bad through 5 = Amazing — based on TSS, RPE, feel score, interval execution, and decoupling. This marks the workout as reviewed and triggers a notification in Intervals.icu if you have coached activity alerts enabled.
@@ -110,6 +110,15 @@ Whenever the coach posts a comment it also sets a coach tick on the activity —
 Each mode (Review, Health, Planning) has its own sidebar showing only its own sessions. Create named sessions with separate histories — for example one for your current training block, one for race prep questions. Sessions are stored on your Home Assistant device and shared across all devices (phone, tablet, PC) that connect to the same instance. Double-click any session name to rename it.
 
 The three automated sessions — Auto-reviews, Weekly recaps, and Wellness checks — are managed by the add-on and cannot be deleted.
+
+### Training memory
+The add-on keeps its own record of how your training actually went, so the coach can plan from it instead of re-reading months of history from Intervals.icu on every conversation — which was the bulk of the token cost.
+
+Per session it stores planned vs. actual TSS and time, compliance, RPE, feel and decoupling, plus a one-line note the auto-review writes in its own words about what actually happened. Per week it keeps hours, TSS, hard sessions, average RPE and feel, and the Monday recap's verdict. It also spots planned sessions you skipped, and distinguishes skipping one from riding something else instead.
+
+The memory is used when planning, in the Monday recap, when reviewing a single ride, and in the morning wellness check — which previously had no idea what you rode yesterday. The coach is told to treat it as the record for weeks already closed, but to always fetch today's readiness, the upcoming calendar and anything from the last 48 hours live, and that a live fetch wins whenever the two disagree.
+
+Nothing is ever deleted. It lives in `/data/training_memory.json`, survives add-on updates, grows by well under a megabyte a year, and fills itself in from your last six months the first time it runs.
 
 ### Token counter
 A daily token counter in the sidebar shows how many tokens have been used today across all chat and automated calls. It resets at midnight and persists across restarts.

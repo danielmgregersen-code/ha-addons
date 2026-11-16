@@ -4,7 +4,7 @@ import re
 import asyncio
 import threading
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from agent import TrainingAgent, group_ride_factors_from_options
 from chains import ChainManager, infer_condition, CONDITION_MULTIPLIERS
+from memory import MemoryStore, extract_memo, judge_planned, recap_target_monday
 
 OPTIONS_FILE = "/data/options.json"
 
@@ -31,8 +32,12 @@ WELLNESS_SESSION = "auto-wellness-check"
 WEEKLY_RECAP_STATE_FILE = f"{STORAGE_DIR}/weekly_recap_state.json"
 WELLNESS_STATE_FILE = f"{STORAGE_DIR}/wellness_state.json"
 AUTOMATION_POLL_SECONDS = 600  # 10-minute check interval for scheduled automations
+MEMORY_SWEEP_STATE_FILE = f"{STORAGE_DIR}/memory_sweep_state.json"
+MEMORY_BACKFILL_DAYS = 180   # one HTTP request, parsed in Python, never entering a prompt
+MEMORY_SWEEP_EVENT_DAYS = 60
 
 chain_manager = ChainManager()
+memory_store = MemoryStore()
 
 
 def load_options() -> dict:
@@ -258,6 +263,7 @@ agent = TrainingAgent(
     group_ride_intensity=options.get("group_ride_intensity", "moderate"),
     group_ride_factors=group_ride_factors_from_options(options),
     group_ride_long_ride_hours=options.get("group_ride_long_ride_hours"),
+    memory=memory_store,
     days_back=options.get("days_back", 28),
     chat_model=options.get("chat_model", "gpt-5.5"),
     auto_review_model=options.get("auto_review_model", "gpt-5.5"),
@@ -299,6 +305,13 @@ async def weekly_recap_loop():
             print(f"Generating weekly recap for {monday}", flush=True)
             recap, usage = agent.weekly_recap()
             accumulate_tokens(usage)
+            memo, recap = extract_memo(recap)
+            try:
+                # The recap reviews the PAST seven days, so its summary belongs to
+                # last Monday — keying it to today misfiles every note by a week.
+                memory_store.set_week_summary(recap_target_monday(now.date()), memo or "", recap)
+            except Exception as e:
+                print(f"Memory recap summary error: {e}", flush=True)
             with sessions_lock:
                 append_to_session(sessions, WEEKLY_RECAP_SESSION, f"[Weekly recap] {monday}", recap)
                 sessions_debouncer.schedule_save(lambda: save_sessions(sessions))
@@ -373,6 +386,42 @@ async def wellness_check_loop():
             print(f"Wellness check error: {e}", flush=True)
 
 
+def _memory_sweep(activities):
+    """Backfill once, then judge past planned workouts and reconcile deletions.
+
+    Wrapped whole in try/except: a failed GET /events must never take down chain
+    wear logging or auto-review, which share this loop iteration.
+    """
+    try:
+        if not memory_store.backfilled:
+            history = agent.icu.get_activities(days_back=MEMORY_BACKFILL_DAYS,
+                                               max_days_back=MEMORY_BACKFILL_DAYS,
+                                               group_keywords=agent.group_ride_keywords)
+            past = agent.icu.get_events(days_ahead=0, days_back=MEMORY_SWEEP_EVENT_DAYS)
+            count = memory_store.backfill(history, past)
+            print(f"Training memory backfilled: {count} sessions over "
+                  f"{MEMORY_BACKFILL_DAYS} days.", flush=True)
+            _save_json_file(MEMORY_SWEEP_STATE_FILE, {"last_date": date.today().isoformat()},
+                            "could not save memory sweep state")
+            return
+
+        today = date.today().isoformat()
+        if _load_json_file(MEMORY_SWEEP_STATE_FILE, {}).get("last_date") == today:
+            return
+        # Daily, not weekly: a skip discovered on Monday would otherwise be up to
+        # seven days stale in the wellness prompt that reads it every morning.
+        past = agent.icu.get_events(days_ahead=0, days_back=14)
+        sessions = memory_store.live_sessions()
+        memory_store.record_planned(judge_planned(past, sessions, date.today()))
+        if activities:
+            since = min((a.get("date") or "9999") for a in activities)
+            memory_store.reconcile_deleted([a.get("id") for a in activities], since)
+        _save_json_file(MEMORY_SWEEP_STATE_FILE, {"last_date": today},
+                        "could not save memory sweep state")
+    except Exception as e:
+        print(f"Memory sweep error: {e}", flush=True)
+
+
 # ── Background auto-review polling ──
 async def auto_review_loop():
     print("Auto-review polling started.", flush=True)
@@ -418,6 +467,13 @@ async def auto_review_loop():
                     except Exception as e:
                         print(f"Chain wear log error for {activity.get('id')}: {e}", flush=True)
 
+                # Before the gates on purpose: gated, memory would only ever see
+                # activities that have RPE and feel and no tick — a small minority.
+                try:
+                    memory_store.upsert_session(activity)
+                except Exception as e:
+                    print(f"Memory upsert error for {activity.get('id')}: {e}", flush=True)
+
                 if activity.get("coach_tick"):
                     continue
                 if not activity.get("rpe") or not activity.get("feel"):
@@ -425,6 +481,16 @@ async def auto_review_loop():
                 print(f"Auto-reviewing: {activity.get('name')} ({activity.get('id')})", flush=True)
                 comment, usage = agent.auto_review(activity)
                 accumulate_tokens(usage)
+                # Strip the marker before the comment reaches the notification, the
+                # push or the chat: the frontend only strips [[PROPOSE_*]].
+                memo, comment = extract_memo(comment)
+                try:
+                    memory_store.set_note(
+                        activity["id"],
+                        memo or " ".join(comment.split(". ")[:2]),
+                        source="auto_review" if memo else "fallback")
+                except Exception as e:
+                    print(f"Memory note error for {activity.get('id')}: {e}", flush=True)
 
                 # Build notification
                 notif = {
@@ -459,6 +525,9 @@ async def auto_review_loop():
             # After processing rides (and after sealant calendar ticks), fire
             # any newly-crossed wax/sealant life thresholds (25% and 0%).
             await dispatch_chain_alerts()
+            # Must run after the ride loop: the fetch above is what populates the
+            # window the sweep cross-references.
+            _memory_sweep(new_activities)
         except Exception as e:
             print(f"Auto-review error: {e}", flush=True)
 

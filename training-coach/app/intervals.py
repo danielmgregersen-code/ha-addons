@@ -271,8 +271,12 @@ class IntervalsClient:
             params={"oldest": oldest, "newest": newest},
         )
 
-    def get_events(self, days_ahead: int = 21):
-        oldest = datetime.now().strftime("%Y-%m-%d")
+    def get_events(self, days_ahead: int = 21, days_back: int = 0):
+        """Planned calendar events. days_back is for the memory sweep only and is
+        deliberately not exposed in the get_planned_workouts tool schema — letting
+        the model pull past events is the token sink the memory exists to remove.
+        The default is unchanged, so every existing caller behaves identically."""
+        oldest = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
         newest = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
         events = self._get(
             f"/athlete/{self.athlete_id}/events",
