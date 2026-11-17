@@ -282,8 +282,44 @@ class TestStore(unittest.TestCase):
         s.upsert_session(self._activity(id="i1"))
         s.upsert_session(self._activity(id="i2", group_ride=True))
         s.upsert_session(self._activity(id="i3"))
-        s.set_execution("i3", {"basis": "plan"})
+        s.set_execution("i3", {"v": EXEC_VERSION, "basis": "plan"})
         self.assertEqual(set(s.sessions_needing_execution(10)), {"i1"})
+
+    def test_the_queue_re_measures_an_older_schema(self):
+        """The drip is where the back catalogue lives. Its own narrower test meant a
+        version bump never reached anything outside the ride loop's fortnight."""
+        s = self.store()
+        s.upsert_session(self._activity(id="i1"))
+        s.set_execution("i1", {"v": 1, "basis": "plan", "reps_done": 3})
+        self.assertEqual(s.sessions_needing_execution(10), ["i1"])
+
+    def test_the_queue_revisits_a_session_whose_plan_has_since_arrived(self):
+        s = self.store()
+        s.upsert_session(self._activity(id="i1", paired_event_id=77))
+        s.set_execution("i1", {"v": EXEC_VERSION, "basis": "actual_only",
+                               "reason": "no_plan", "tss": 98})
+        self.assertEqual(s.sessions_needing_execution(10), [])
+        s.record_plans([{"id": 77, "date": "2026-11-10", "category": "WORKOUT",
+                         "description": PLAN_TEXT}])
+        self.assertEqual(s.sessions_needing_execution(10), ["i1"])
+
+    def test_plan_status_separates_the_three_failures(self):
+        s = self.store()
+        self.assertEqual(s.plan_status(None), "no_pairing")
+        self.assertEqual(s.plan_status(77), "plan_not_recorded")
+        s.record_plans([{"id": 77, "date": "2026-11-10", "category": "WORKOUT",
+                         "description": "Just ride steady for 90 minutes."}])
+        self.assertEqual(s.plan_status(77), "plan_unparsed")
+        s.record_plans([{"id": 78, "date": "2026-11-10", "category": "WORKOUT",
+                         "description": PLAN_TEXT}])
+        self.assertEqual(s.plan_status(78), "ok")
+
+    def test_a_migration_runs_once(self):
+        s = self.store()
+        self.assertTrue(s.needs_migration("plans_180d"))
+        s.mark_migration("plans_180d")
+        self.assertFalse(s.needs_migration("plans_180d"))
+        self.assertTrue(s.needs_migration("wellness_180d"))
 
 
 if __name__ == "__main__":
@@ -348,3 +384,152 @@ class TestPlannedStructureAndReps(unittest.TestCase):
         got = compare_execution(plan(), payload(
             [iv(900, 228, 91), iv(900, 222, 89)], count=2))
         self.assertIn("prescribed 3x15m@88-92%", execution_sentence(got))
+
+
+OVER_UNDER_TEXT = """Warmup
+- 10m 50-65%
+- Press lap 1m 50-60%
+
+Main set 3x
+- Over 2m 100-105%
+- Under 3m 88-92%
+- Recovery Press lap 3m 50-60%
+
+Cooldown
+- Cooldown Press lap 10m 50-65%"""
+
+
+class TestProseDoesNotRefuseTheWorkout(unittest.TestCase):
+    """The planning prompt mandates a fueling line as the first item of every
+    description. Any non-step line containing "N x" used to refuse the whole
+    workout, so sessions the add-on itself had planned were never measured."""
+
+    def test_a_fueling_note_naming_the_structure_still_parses(self):
+        got = parse_planned_workout(
+            "Fueling: 90 g/hr across the 3 x 15 min efforts, liquids only.\n" + PLAN_TEXT)
+        self.assertEqual(plan_text(got), "3x15m@88-92%")
+
+    def test_a_title_line_naming_the_structure_still_parses(self):
+        got = parse_planned_workout("Base Sweet Spot - 3 x 15m\n" + PLAN_TEXT)
+        self.assertEqual(plan_text(got), "3x15m@88-92%")
+
+    def test_a_trailing_note_still_parses(self):
+        got = parse_planned_workout(PLAN_TEXT + "\nTotal 3 x 15 min at sweet spot.")
+        self.assertEqual(plan_text(got), "3x15m@88-92%")
+
+    def test_prose_between_a_repeat_header_and_its_steps_keeps_the_rep_count(self):
+        """The reset to one rep must not fire on a line that is not the header."""
+        got = parse_planned_workout(
+            PLAN_TEXT.replace("Main set 3x", "Main set 3x\nHold 90 rpm throughout."))
+        self.assertEqual(got["reps_planned"], 3)
+
+    def test_an_ambiguous_repeat_header_is_still_refused(self):
+        """Where the count genuinely is ambiguous, silence beats a guess."""
+        for header in ("Main set 2x20", "Main set 1 - 3x15m"):
+            with self.subTest(header=header):
+                self.assertIsNone(
+                    parse_planned_workout(PLAN_TEXT.replace("Main set 3x", header)))
+
+
+class TestAmbiguousSetsReportWhatIsEstablished(unittest.TestCase):
+    """Over-unders: the rep count and the fade across reps are established, the band
+    per rep is not. Rendering nothing left the hardest sessions blank."""
+
+    def _measured(self):
+        plan = parse_planned_workout(OVER_UNDER_TEXT)
+        efforts = []
+        for over, under in ((305, 255), (300, 250), (292, 244)):
+            efforts.append(iv(120, over, 102))
+            efforts.append(iv(180, under, 90))
+        return plan, compare_execution(plan, payload(efforts))
+
+    def test_reps_are_counted_but_the_band_is_not_judged(self):
+        _, got = self._measured()
+        self.assertEqual(got["basis"], "unclear")
+        self.assertEqual(got["reason"], "ambiguous_set")
+        self.assertEqual((got["reps_done"], got["reps_planned"]), (3, 3))
+        self.assertNotIn("target_hit", got)
+
+    def test_the_prescribed_structure_renders_without_a_band(self):
+        _, got = self._measured()
+        self.assertEqual(got["plan_text"], "3x5m")
+
+    def test_fade_compares_reps_not_the_over_against_the_under(self):
+        """Unweighted, an "over" against the next "under" reads as a 20% collapse
+        inside every rep."""
+        _, got = self._measured()
+        self.assertEqual(got["reps"], [275, 270, 263])
+        self.assertLess(-6, got["fade_pct"])
+        self.assertLess(got["fade_pct"], 0)
+
+    def test_the_tag_says_the_band_was_not_judged(self):
+        _, got = self._measured()
+        tag = _exec_tag(got, structured=True)
+        self.assertIn("3x5m 3/3", tag)
+        self.assertIn("275/270/263W", tag)
+        self.assertIn("(over-unders: band not judged)", tag)
+        self.assertNotIn("\u2713", tag)
+
+    def test_the_auto_review_note_keeps_the_rep_count_it_measured(self):
+        """The unclear branch told the model no rep count was established. For an
+        over-under set that throws away a fact the comparison did establish."""
+        _, got = self._measured()
+        sentence = execution_sentence(got)
+        self.assertIn("prescribed 3x5m", sentence)
+        self.assertIn("3 of 3 reps", sentence)
+        self.assertIn("NOT established", sentence)
+
+    def test_it_stays_out_of_the_aggregates(self):
+        """A rep whose band was never judged must not enter an on-target percentage."""
+        _, got = self._measured()
+        self.assertEqual(MemoryStore._exec_records([{"exec": got}]), [])
+
+
+class TestUnmeasuredSessionsSayWhy(unittest.TestCase):
+    def test_a_hard_session_with_no_plan_on_record_says_so(self):
+        """Including how many efforts the device recorded: that the athlete clearly
+        did intervals is a fact, and it is not the same as finding none."""
+        record = {"v": EXEC_VERSION, "basis": "actual_only", "reason": "plan_not_recorded",
+                  "efforts": 3, "fade_pct": 0.0, "median_pct": 90}
+        self.assertEqual(_exec_tag(record, structured=True),
+                         " ex 3 efforts (no plan on record)")
+
+    def test_a_marker_never_carries_the_actual_side_averages(self):
+        """A bare "fade +0%" beside a failure reads as a measurement that worked."""
+        record = {"v": EXEC_VERSION, "basis": "none", "reason": "no_intervals",
+                  "fade_pct": 0.0}
+        self.assertEqual(_exec_tag(record, structured=True),
+                         " ex not measured (no laps recorded)")
+
+    def test_an_endurance_ride_says_nothing(self):
+        """A plan with nothing rep-shaped in it has no reps to have been missed."""
+        record = {"v": EXEC_VERSION, "basis": "actual_only", "reason": "unstructured"}
+        self.assertEqual(_exec_tag(record, structured=True), "")
+
+    def test_an_easy_ride_with_no_plan_is_not_a_gap(self):
+        record = {"v": EXEC_VERSION, "basis": "actual_only", "reason": "no_plan"}
+        self.assertEqual(_exec_tag(record, structured=False), "")
+
+    def test_laps_that_did_not_line_up_are_reported_whatever_the_intensity(self):
+        """A deload session is not "hard", and its failed measurement is still a gap:
+        the record itself proves a plan was compared against it."""
+        record = {"v": EXEC_VERSION, "basis": "unclear", "reason": "split_or_merged",
+                  "reps_planned": 4}
+        self.assertEqual(_exec_tag(record, structured=False),
+                         " ex not measured (laps did not line up with the plan)")
+
+    def test_a_never_measured_hard_session_says_not_yet(self):
+        self.assertEqual(_exec_tag(None, structured=True), " ex not measured yet")
+        self.assertEqual(_exec_tag(None), "")
+
+
+class TestNoPlanIsDistinguishedFromUnstructured(unittest.TestCase):
+    def test_a_recorded_endurance_plan_reads_as_unstructured(self):
+        got = compare_execution(parse_planned_workout("Warmup\n- 90m 60-70%"),
+                                payload([iv(5400, 180, 70)]))
+        self.assertEqual(got["reason"], "unstructured")
+
+    def test_no_plan_at_all_reads_as_no_plan(self):
+        got = compare_execution(None, payload([iv(5400, 180, 70)]))
+        self.assertEqual(got["reason"], "no_plan")
+

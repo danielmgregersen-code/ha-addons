@@ -26,14 +26,18 @@ SCHEMA_VERSION = 1
 # has already run by then. See TrainingAgent._inject_memory.
 MEMORY_SENTINEL = "<<MEMORY>>"
 
-# Hard caps per scope. Enforced by dropping the oldest week, never by truncating
-# mid-string — a half-sentence in a system prompt is worse than one fewer week.
-MAX_CHARS = {"planning": 5000, "review": 800, "recap": 5000, "wellness": 600}
+# Hard caps per scope. Enforced by dropping the OLDEST session detail, never by
+# truncating mid-string — a half-sentence in a system prompt is worse than one
+# fewer week. Generous on purpose: this block exists to displace live Intervals.icu
+# fetches that cost far more tokens, and far more wall-clock, than it does. The
+# review cap was the binding one: five session lines each carrying an execution tag
+# AND an auto-review note of up to 240 characters never fitted in 800.
+MAX_CHARS = {"planning": 8000, "review": 2500, "recap": 8000, "wellness": 600}
 
 # Execution record schema. Bumping it makes needs_execution re-measure every stored
 # session through the existing drip — the raw interval payloads are not kept, so a
 # richer record can only be rebuilt by fetching again.
-EXEC_VERSION = 2
+EXEC_VERSION = 3
 # Beyond this many reps the per-rep list is summarised: a 10x1min VO2 session would
 # otherwise crowd a week of other sessions out of the block when _fit starts trimming.
 MAX_RENDERED_REPS = 6
@@ -50,7 +54,7 @@ _WELLNESS_FIELDS = ("hrv", "restingHR", "sleepScore", "sleepSecs", "ctl", "atl")
 _NUMERIC_FIELDS = (
     "date", "ts", "name", "type", "duration_min", "tss", "intensity",
     "avg_power", "avg_hr", "rpe", "feel", "coach_tick", "compliance",
-    "paired_event_id", "group_ride", "decoupling", "efficiency_factor",
+    "paired_event_id", "group_ride", "trainer", "decoupling", "efficiency_factor",
     "z4plus_min",
 )
 
@@ -70,11 +74,13 @@ one, and any session from the last 48 hours whose detail matters (use get_recent
 not more). When memory and a live fetch disagree, the live fetch wins and memory is wrong. Never add an
 estimated TSS for a ride memory already reports as completed, and do not quote the block back to the
 athlete as if it were fresh analysis.
-Lines headed "Interval execution" and session tags like "ex 3/3 @97% fade -6%" are measured by this
-add-on from the device's own intervals against the workout it wrote — they are the record of interval
-execution; do not call get_activity_intervals to re-derive a session memory already states. A session
-with NO such tag was unstructured, a group ride, or could not be measured — never read a missing tag
-as a missed session."""
+Lines headed "Interval execution" and session tags like "ex 3x15m@88-92% 3/3 2✓ 228/222/209W fade -8.3%"
+are measured by this add-on from the device's own intervals against the workout it wrote — they are the
+record of interval execution; do not call get_activity_intervals to re-derive a session memory already
+states. A tag reading "ex not measured (...)" gives the reason no comparison was possible — no plan on
+record, laps that did not line up — and is NEVER evidence of a missed session; neither is the
+"Execution coverage" line, which counts measurements, not adherence. Say the measurement is missing,
+not that the work was. A session with no tag at all was unstructured, a group ride, or not measured."""
 
 
 # ── Pure helpers ──
@@ -156,6 +162,10 @@ def session_record_from_activity(activity: dict):
         # on both sides or paired-event matching silently never fires.
         "paired_event_id": str(paired) if paired not in (None, "") else None,
         "group_ride": bool(activity.get("group_ride")),
+        # Kept so the drip can tell an ERG ride from an outdoor one: it measures from
+        # the stored record, which carried no trainer flag, so every backfilled indoor
+        # session was judged as though the athlete had held the power themselves.
+        "trainer": bool(activity.get("trainer")),
         "decoupling": _num(activity.get("decoupling"), 1),
         "efficiency_factor": _num(activity.get("efficiency_factor"), 2),
         "z4plus_min": _z4plus_minutes(activity.get("power_zone_mins")),
@@ -260,6 +270,26 @@ def _power_target(text: str):
     return None
 
 
+def _neighbours(lines, index):
+    """(index of the previous non-empty line, whether the next one is a step bullet).
+
+    This is what separates a block header from loose prose. The ambiguous-repeat
+    refusal used to fire on ANY non-step line containing "N x", and the planning
+    prompt mandates a fueling line as the first item of every description — so a
+    workout whose own note said "90 g/hr across the 3 x 12 min efforts" parsed as
+    nothing at all, and the session it planned was never measured.
+    """
+    previous = None
+    for i in range(index - 1, -1, -1):
+        if lines[i].strip():
+            previous = i
+            break
+    for i in range(index + 1, len(lines)):
+        if lines[i].strip():
+            return previous, bool(_STEP_RE.match(lines[i].strip()))
+    return previous, False
+
+
 def parse_planned_workout(description):
     """Normalise a planned workout written in this add-on's format, or None.
 
@@ -274,8 +304,10 @@ def parse_planned_workout(description):
         return None
     blocks, current, pending_reps = [], None, 1
     steps_total = unparsed = 0
+    raw_lines = description.splitlines()
+    pending_from = None            # index of the line that set pending_reps
 
-    for raw in description.splitlines():
+    for index, raw in enumerate(raw_lines):
         line = raw.strip()
         if not line:
             continue
@@ -300,11 +332,15 @@ def parse_planned_workout(description):
         current = None                 # a header closes the open block
         tail = _REPEAT_TAIL_RE.search(line)
         if tail:
-            pending_reps = int(tail.group(1))
-        elif _REPEAT_ANY_RE.search(line):
+            pending_reps, pending_from = int(tail.group(1)), index
+            continue
+        previous, introduces = _neighbours(raw_lines, index)
+        if not introduces:
+            continue   # loose prose. It introduces no block, so it decides nothing
+        if _REPEAT_ANY_RE.search(line):
             return None                # "2x20", "3 x 10m": the rep count is ambiguous
-        else:
-            pending_reps = 1
+        if pending_from != previous:
+            pending_reps = 1           # a genuine header carrying no rep count
 
     if steps_total == 0 or unparsed * 4 > steps_total:
         return None                    # prose, or a markdown bullet list
@@ -397,7 +433,12 @@ def compare_execution(plan, payload, ftp=None, trainer=False):
     if not sets:
         durations = [_num(i.get("duration_seconds")) or 0 for i in efforts]
         pcts = [p for p in (_rep_pct(i, ftp) for i in efforts) if p]
+        # "unstructured" and "no plan" are different facts: the first is a plan with
+        # nothing rep-shaped in it (an endurance ride, nothing to miss), the second is
+        # a measurement that never had a plan to compare against. Only the caller can
+        # tell a missing pairing from an unparseable description, so it labels that.
         result = {**out, "basis": "actual_only", "efforts": len(efforts),
+                  "reason": "unstructured" if plan else "no_plan",
                   "work_min": round(sum(durations) / 60),
                   "median_min": round((_median(durations) or 0) / 60, 1),
                   "median_pct": round(_median(pcts)) if pcts else None}
@@ -428,6 +469,30 @@ def compare_execution(plan, payload, ftp=None, trainer=False):
     else:
         if len(pool) == reps_planned:
             match = "count"
+
+    # A rep made of more than one effort (over-unders) cannot have a band judged per
+    # rep — but the rep COUNT and the fade across reps are established when every
+    # piece is present. Group the pieces and report that much; the alternative was
+    # rendering nothing at all for the athlete's hardest sessions.
+    steps_per_rep = sets[0]["steps"] if len(sets) == 1 else 0
+    if (any(s["ambiguous"] for s in sets) and steps_per_rep > 1
+            and len(pool) == reps_planned * steps_per_rep):
+        grouped = _group_reps(pool, steps_per_rep)
+        record = {**out, "basis": "unclear", "reason": "ambiguous_set",
+                  "reps_planned": reps_planned, "reps_done": len(grouped),
+                  "work_min": round(sum(_num(i.get("duration_seconds")) or 0
+                                        for i in pool) / 60)}
+        prescribed = plan_text(plan, with_band=False)
+        if prescribed:
+            record["plan_text"] = prescribed
+        values, unit = _rep_values(grouped, ftp)
+        if values:
+            record["reps"] = values
+            record["rep_unit"] = unit
+        fade = _fade(grouped)
+        if fade is not None:
+            record["fade_pct"] = fade
+        return record
 
     planned_work = sum(s["reps"] * s["work_seconds"] for s in sets)
     actual_work = sum(_num(i.get("duration_seconds")) or 0 for i in pool)
@@ -618,6 +683,20 @@ def execution_sentence(record) -> str:
     if not record:
         return ""
     basis = record.get("basis")
+    if basis == "unclear" and record.get("reps_done") is not None:
+        # Over-unders: the rep count IS established, only the band is not. Saying
+        # "no rep count established" here would throw away a fact we measured.
+        bits = []
+        if record.get("plan_text"):
+            bits.append(f"prescribed {record['plan_text']}")
+        bits.append(f"{record['reps_done']} of {record.get('reps_planned')} reps")
+        if record.get("fade_pct") is not None:
+            bits.append(f"fade {record['fade_pct']:+g}% first to last")
+        return ("Measured execution for this ride, computed by the add-on from the device "
+                "intervals against the workout it planned: " + ", ".join(bits)
+                + ". Each rep is made of more than one effort (over-unders or similar), so "
+                "whether an individual rep landed in its power band is NOT established — "
+                "do not claim it either way.")
     if basis == "unclear":
         return ("The detected intervals did not line up with the planned structure "
                 "(likely lap presses, not missed work), so rep counts are not "
@@ -644,18 +723,19 @@ def execution_sentence(record) -> str:
     return sentence + " Treat these as given; call get_activity_intervals only for detail beyond them."
 
 
-def plan_text(plan) -> str:
+def plan_text(plan, with_band: bool = True) -> str:
     """The prescribed structure, compactly: "3x15m@88-92%", or two sets joined by +.
 
     The comparison already parses this and then threw it away, so the review could
-    say how many reps landed but never what was asked for.
+    say how many reps landed but never what was asked for. with_band=False renders
+    "3x5m" alone, for a set whose band cannot honestly be attributed to one rep.
     """
     bits = []
     for item in (plan or {}).get("sets") or []:
         minutes = round((item.get("work_seconds") or 0) / 60)
         if not minutes:
             continue
-        band = item.get("band") or {}
+        band = (item.get("band") or {}) if with_band else {}
         if band.get("unit") == "pct":
             target = f"@{band['low']}-{band['high']}%" if band["low"] != band["high"] else f"@{band['low']}%"
         elif band.get("unit") == "w":
@@ -664,6 +744,23 @@ def plan_text(plan) -> str:
             target = ""
         bits.append(f"{item.get('reps', 1)}x{minutes}m{target}")
     return " + ".join(bits)
+
+
+def _group_reps(efforts, steps_per_rep):
+    """Collapse consecutive efforts into one pseudo-rep each, duration-weighted on
+    power: for over-unders an "over" and an "under" are two efforts but one rep, so
+    comparing them to each other would read as a 20% collapse within every rep.
+    """
+    out = []
+    for start in range(0, len(efforts), steps_per_rep):
+        chunk = efforts[start:start + steps_per_rep]
+        pairs = [(_num(c.get("avg_power")), _num(c.get("duration_seconds")) or 0)
+                 for c in chunk]
+        seconds = sum(d for _, d in pairs)
+        power = (round(sum(w * d for w, d in pairs) / seconds)
+                 if seconds and all(w for w, _ in pairs) else None)
+        out.append({"duration_seconds": seconds, "avg_power": power})
+    return out
 
 
 def _rep_values(efforts, ftp):
@@ -679,19 +776,30 @@ def _rep_values(efforts, ftp):
     return [], ""
 
 
-def _exec_tag(record) -> str:
-    """Short execution tag for a session line, or "" when nothing is established.
+# Why a session carries no rep-by-rep verdict, in the words the athlete reads. None
+# means say nothing: an endurance ride has no intervals to have missed.
+_EXEC_REASON_TEXT = {
+    "unstructured": None,
+    "no_plan": "no plan on record",
+    "no_pairing": "ride not paired to a planned workout",
+    "plan_not_recorded": "no plan on record",
+    "plan_unparsed": "planned text could not be parsed",
+    "no_intervals": "no laps recorded",
+    "no_matching_efforts": "laps did not match the plan",
+    "split_or_merged": "laps did not line up with the plan",
+    "ambiguous_set": "over-unders: band not judged",
+    "fetch_failed": "intervals could not be fetched",
+}
 
-    Only `basis: plan` is tagged. An actual_only or unclear record renders nothing
-    rather than half a claim — and the usage instructions tell the model that a
-    missing tag means unmeasured, never a missed session.
-    """
-    if not record or record.get("basis") != "plan":
-        return ""
+
+def _exec_bits(record) -> list:
+    """The measured facts, in render order. Shared so a partial verdict renders the
+    same way a full one does — only the facts present differ."""
     bits = []
     if record.get("plan_text"):
         bits.append(record["plan_text"])
-    bits.append(f"{record.get('reps_done')}/{record.get('reps_planned')}")
+    if record.get("reps_done") is not None:
+        bits.append(f"{record['reps_done']}/{record.get('reps_planned')}")
     if record.get("target_hit") is not None:
         # The count the review prompt always claimed was here and never was.
         bits.append(f"{record['target_hit']}\u2713")
@@ -708,7 +816,38 @@ def _exec_tag(record) -> str:
         bits.append(f"fade {record['fade_pct']:+g}%")
     if record.get("short_reps"):
         bits.append(f"{record['short_reps']} short")
-    return " ex " + " ".join(bits)
+    return bits
+
+
+def _exec_tag(record, structured: bool = False) -> str:
+    """Execution tag for a session line, or "" when there is nothing honest to say.
+
+    A non-plan verdict used to render NOTHING — no tag, no reason, no count — so a
+    session that could not be measured was indistinguishable from one that was never
+    structured, and the athlete had no way to see that a measurement had failed
+    rather than that they had. Now it says which, and never implies a shortfall.
+
+    `structured` gates the marker where the record cannot prove a plan existed: an
+    easy ride with no plan on record is not a gap worth a line.
+    """
+    if not record:
+        return " ex not measured yet" if structured else ""
+    reason = _EXEC_REASON_TEXT.get(record.get("reason"))
+    if record.get("basis") == "plan":
+        return " ex " + " ".join(_exec_bits(record))
+    if record.get("reps_done") is not None:
+        # A rep count was established even though the band was not (over-unders).
+        return " ex " + " ".join(_exec_bits(record)) + (f" ({reason})" if reason else "")
+    if not reason or not (structured or record.get("reps_planned") is not None):
+        return ""
+    # Nothing about reps is established. Render the reason and, at most, how many
+    # efforts the device recorded — a fact, and the difference between "no plan to
+    # compare against" and "no intervals at all". Never the actual-side averages:
+    # a bare "fade +0%" beside a failure reads as a measurement that succeeded.
+    efforts = record.get("efforts")
+    if efforts:
+        return f" ex {efforts} effort{'' if efforts == 1 else 's'} ({reason})"
+    return f" ex not measured ({reason})"
 
 
 # ── Store ──
@@ -737,6 +876,12 @@ class MemoryStore:
             "weeks": {},
             "planned": {},
             "wellness": {},
+            # One-off work that has already been done, by name. Without this every
+            # later addition had to borrow the `backfilled` flag, and a flag already
+            # spent by an earlier version silently never ran again: this is why the
+            # 180-day plan recording added in 1.7.0 and the wellness store added in
+            # 1.8.0 never executed on an install backfilled under 1.6.0.
+            "migrations": {},
         }
 
     def _load(self):
@@ -759,7 +904,7 @@ class MemoryStore:
                   f"{SCHEMA_VERSION} — loaded read-only.", flush=True)
         merged = self._empty()
         merged.update(data)
-        for key in ("sessions", "weeks", "planned", "wellness"):
+        for key in ("sessions", "weeks", "planned", "wellness", "migrations"):
             if not isinstance(merged.get(key), dict):
                 merged[key] = {}
         self._data = merged
@@ -890,14 +1035,68 @@ class MemoryStore:
 
     def sessions_needing_execution(self, limit: int = 10):
         """Ids worth fetching, newest first — the loop's own 14-day window cannot
-        see the backfilled months, so the drip needs its own queue."""
+        see the backfilled months, so the drip needs its own queue.
+
+        Delegates to needs_execution so there is ONE answer to "does this want
+        measuring". It used to carry its own narrower test — no record, or a pending
+        one — which silently excluded the schema-version re-measure that lives in
+        needs_execution, so a richer record never reached anything older than the
+        ride loop's fortnight however many times the version was bumped.
+        """
         with self._lock:
-            pending = [s for s in self._live_sessions()
-                       if not s.get("group_ride") and (
-                           not s.get("exec")
-                           or (s.get("exec", {}).get("basis") == "pending"
-                               and (s["exec"].get("attempts") or 0) < 3))]
+            candidates = [s for s in self._live_sessions() if not s.get("group_ride")]
+            pending = [s for s in candidates
+                       if self.needs_execution(s["id"], tss=s.get("tss"))
+                       or self._plan_arrived(s)]
         return [s["id"] for s in reversed(pending)][:limit]
+
+    def _plan_arrived(self, session) -> bool:
+        """A settled verdict of "no plan on record" is worth revisiting exactly once:
+        when the plan has since been recorded. Nothing else re-measures a settled
+        record, which is why an October session stayed unmeasured for good."""
+        record = session.get("exec") or {}
+        if record.get("reason") not in ("no_plan", "plan_not_recorded", "no_pairing",
+                                        "plan_unparsed"):
+            return False
+        return self.plan_status(session.get("paired_event_id")) == "ok"
+
+    def plan_status(self, event_id) -> str:
+        """Why a session has nothing to be measured against. The three failures are
+        different problems and were previously indistinguishable from each other."""
+        if not event_id:
+            return "no_pairing"
+        with self._lock:
+            record = self._data["planned"].get(str(event_id))
+        if not record:
+            return "plan_not_recorded"
+        if not record.get("plan"):
+            return "plan_unparsed"
+        return "ok"
+
+    def needs_migration(self, name: str) -> bool:
+        with self._lock:
+            return not (self._data.get("migrations") or {}).get(name)
+
+    def mark_migration(self, name: str) -> None:
+        with self._lock:
+            self._data.setdefault("migrations", {})[name] = date.today().isoformat()
+            self._save()
+
+    def execution_breakdown(self) -> dict:
+        """Counts by verdict and reason, for /debug/storage. The distribution was
+        only ever inferable from what the prompts happened to render."""
+        out = {}
+        with self._lock:
+            for session in self._live_sessions():
+                record = session.get("exec")
+                if not record:
+                    key = "not_measured"
+                else:
+                    key = record.get("basis") or "unknown"
+                    if record.get("reason"):
+                        key = f"{key}/{record['reason']}"
+                out[key] = out.get(key, 0) + 1
+        return dict(sorted(out.items(), key=lambda kv: (-kv[1], kv[0])))
 
     def record_plans(self, events) -> bool:
         """Store the parsed plan for each planned workout.
@@ -1164,7 +1363,8 @@ class MemoryStore:
                 text = self._render_recap(sessions)
             else:
                 return ""
-        fitted = self._fit(text, MAX_CHARS.get(scope, 1200))
+        fitted = self._fit(text, MAX_CHARS.get(scope, 1200),
+                           oldest_first=(scope != "review"))
         if fitted and scope == "planning":
             # The usage rules only pay for themselves where the model would
             # otherwise re-fetch history. Prepended after _fit so the static
@@ -1173,13 +1373,48 @@ class MemoryStore:
         return fitted
 
     @staticmethod
-    def _fit(text: str, limit: int) -> str:
-        """Drop whole lines from the middle-oldest end until under budget. Never
-        truncate mid-string — a half-sentence in a system prompt reads as data
-        corruption to the model."""
+    def _fit(text: str, limit: int, oldest_first: bool = True) -> str:
+        """Drop the OLDEST session detail until under budget, never truncating
+        mid-string — a half-sentence in a system prompt reads as data corruption.
+
+        This used to delete lines[-2] repeatedly, which ate the trailers first: the
+        execution summary, then the wellness trend, then the monthly totals, then
+        session lines from the NEWEST end upward. That is precisely the content the
+        cap exists to protect. Session detail lines are the indented ones; the detail
+        runs oldest-first in every scope except review, which lists newest first.
+        """
         if len(text) <= limit:
             return text
         lines = text.split("\n")
+        detail = [i for i, line in enumerate(lines) if line.startswith("  ")]
+        if not oldest_first:
+            detail.reverse()
+
+        def rendered(dropped):
+            """The block with those lines replaced by one honest marker — a silently
+            shortened list reads as a complete one."""
+            if not dropped:
+                return text
+            marker = min(dropped) if oldest_first else max(dropped)
+            kept = []
+            for i, line in enumerate(lines):
+                if i == marker:
+                    kept.append(f"  … {len(dropped)} older session(s) trimmed to fit")
+                elif i not in dropped:
+                    kept.append(line)
+            return "\n".join(kept)
+
+        dropped = set()
+        for i in detail:
+            # Measured WITH the marker, which is itself a line: counting without it
+            # stops one line early and the shortfall then comes out of the trailers.
+            if len(rendered(dropped)) <= limit:
+                break
+            dropped.add(i)
+        out = rendered(dropped)
+        if len(out) <= limit:
+            return out
+        lines = out.split("\n")
         while len(lines) > 3 and len("\n".join(lines)) > limit:
             del lines[-2]
         out = "\n".join(lines)
@@ -1260,8 +1495,12 @@ class MemoryStore:
                     f"{(session.get('name') or session.get('type') or 'session')[:22]:22} "
                     f"{_fmt(session.get('duration_min'), 'm')}/{_fmt(session.get('tss'))} "
                     f"rpe{_fmt(session.get('rpe'))} feel{_fmt(session.get('feel'))}"
-                    + _exec_tag(session.get("exec"))
+                    + _exec_tag(session.get("exec"),
+                                structured=is_hard_session(session, group_ride_is_hard))
                     + (f" — {session['note']}" if session.get("note") else ""))
+            coverage = self._execution_coverage(recent, group_ride_is_hard)
+            if coverage:
+                lines.append(coverage)
 
         months = {}
         for session in sessions:
@@ -1276,6 +1515,41 @@ class MemoryStore:
         if trend:
             lines.append("Wellness by week (avg): " + " · ".join(trend))
         return lines
+
+    def _execution_coverage(self, sessions, group_ride_is_hard):
+        """One line: how much of the window was measured rep by rep, and why the rest
+        was not. Without it a block of untagged sessions reads as a block of missed
+        ones — which is how a plan-recording gap looked like an adherence problem.
+
+        The denominator counts only sessions that wanted measuring: one the add-on
+        had a plan for, or a hard session it had none for. A walk, a strength session
+        or an easy spin is not a gap in coverage.
+        """
+        measured, reasons = 0, {}
+        for session in sessions:
+            if session.get("group_ride"):
+                continue
+            record = session.get("exec") or {}
+            if record.get("basis") == "plan":
+                measured += 1
+                continue
+            if record.get("reason") == "unstructured":
+                continue
+            label = _EXEC_REASON_TEXT.get(record.get("reason"))
+            if record.get("reps_planned") is None:
+                if not is_hard_session(session, group_ride_is_hard):
+                    continue
+                label = label or "not measured yet"
+            if not label:
+                continue
+            reasons[label] = reasons.get(label, 0) + 1
+        total = measured + sum(reasons.values())
+        if not total:
+            return ""
+        bits = [f"Execution coverage: {measured} of {total} measured rep by rep"]
+        bits += [f"{count} {label}" for label, count
+                 in sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))]
+        return " · ".join(bits)
 
     def _wellness_rows(self, mondays):
         """Weekly HRV / resting HR / sleep / form averages from the stored rows."""
@@ -1385,7 +1659,8 @@ class MemoryStore:
             lines.append(f"  {s.get('date', '')[5:]} {s.get('name') or s.get('type') or 'session'} "
                          f"{_fmt(s.get('duration_min'), 'm')}/{_fmt(s.get('tss'))} "
                          f"rpe{_fmt(s.get('rpe'))} feel{_fmt(s.get('feel'))}"
-                         + _exec_tag(s.get("exec"))
+                         + _exec_tag(s.get("exec"),
+                                     structured=is_hard_session(s, group_ride_is_hard))
                          + (f" — {s['note']}" if s.get("note") else ""))
         return "\n".join(lines)
 

@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.10.0
+
+- **Session reviews were only ever detailed for the last two weeks, and this fixes
+  it.** The add-on recorded your planned workouts 14 days back, so any session older
+  than a fortnight had nothing to be compared against — which is why 20, 23 and 27
+  October showed no interval detail while 3 and 8 November did. It now records them
+  six months back, and re-measures your whole back catalogue over about twenty
+  minutes after the update.
+- 1.9.0 said it would re-measure your stored sessions. It did not reach anything
+  older than two weeks: the queue that works through the back catalogue was asking a
+  narrower question than the one the re-measure answered. Fixed, and they now share
+  a single answer.
+- **A session that cannot be measured now says why** — `ex 4 efforts (no plan on
+  record)`, `ex 3 efforts (laps did not line up with the plan)` — instead of looking
+  identical to an easy spin. Each block also ends with a line like `Execution
+  coverage: 12 of 14 measured rep by rep · 2 no plan on record`. Both describe the
+  measurement, never your adherence, and the coach is told so explicitly.
+- **Over-unders are no longer blank.** A session whose reps each span two power
+  targets now reports reps completed and the fade across them — `ex 3x5m 3/3
+  275/270/263W fade -4.4% (over-unders: band not judged)`. The band is left unjudged
+  because one rep covers two targets; the power is averaged across each rep rather
+  than comparing an "over" against the next "under", which would read as a 20%
+  collapse inside every rep.
+- **Fixed workouts that measured as nothing because of their own fueling line.** Any
+  line mentioning something like "3 x 12 min" outside the interval list — the fueling
+  note the coach puts first, or the workout's title repeated — made the add-on refuse
+  to read the whole workout. A genuinely ambiguous repeat heading is still refused
+  rather than guessed.
+- Indoor sessions from your history are now recognised as trainer rides when
+  re-measured, so hitting the target is credited to the trainer rather than to you.
+- The memory block can hold more: 8,000 characters for planning and the Monday recap,
+  2,500 for a single-ride review, which is what the richer tags and five long
+  auto-review notes actually need. When it still has to be shortened it now drops the
+  oldest sessions and says so, instead of discarding the newest ones and the trends.
+- Your HRV, resting heart rate and sleep trend was also missing from the Monday recap
+  for the same reason as the plans. It is recorded now.
+- `/debug/storage` reports how many sessions were measured and why the rest were not.
+
 ## 1.9.0
 
 - Session reviews now show **what was prescribed and how many reps landed**, not

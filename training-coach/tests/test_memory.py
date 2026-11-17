@@ -420,3 +420,85 @@ class TestWellnessStore(unittest.TestCase):
         s.record_wellness([{"id": f"2026-11-{10 + i}", "hrv": 60 + i, "restingHR": 47}
                            for i in range(5)])
         self.assertIn("Wellness by week", s.render("recap", max_hours=8, max_tss=500))
+
+
+class TestFitKeepsTheNewest(unittest.TestCase):
+    """_fit used to delete lines[-2] until the text fitted, which ate the execution
+    summary, then the wellness trend, then the monthly totals, then session lines from
+    the NEWEST end — exactly the content the cap exists to carry."""
+
+    def _block(self):
+        return "\n".join(
+            ["TRAINING MEMORY — header", "Wk 11-09  9 h / 500 TSS"]
+            + [f"  11-{day:02d} session {day} 60m/70 rpe5 feel2" for day in range(1, 16)]
+            + ["Trend: weekly TSS rising", "Execution coverage: 3 of 4 measured rep by rep"])
+
+    def test_the_oldest_detail_goes_first_and_the_trailers_survive(self):
+        got = MemoryStore._fit(self._block(), 420)
+        self.assertLessEqual(len(got), 420)
+        self.assertIn("TRAINING MEMORY — header", got)
+        self.assertIn("Wk 11-09", got)
+        self.assertIn("Execution coverage: 3 of 4", got)
+        self.assertIn("Trend: weekly TSS rising", got)
+        self.assertIn("11-15 session 15", got)      # newest detail kept
+        self.assertNotIn("11-01 session 1 ", got)   # oldest detail dropped
+
+    def test_a_shortened_list_says_it_was_shortened(self):
+        got = MemoryStore._fit(self._block(), 420)
+        self.assertIn("trimmed to fit", got)
+
+    def test_the_review_scope_drops_from_its_own_oldest_end(self):
+        """Review lists newest first, so there the oldest line is the last one."""
+        got = MemoryStore._fit(self._block(), 420, oldest_first=False)
+        self.assertIn("11-01 session 1 ", got)
+        self.assertNotIn("11-15 session 15", got)
+
+    def test_text_inside_budget_is_untouched(self):
+        block = self._block()
+        self.assertEqual(MemoryStore._fit(block, 10_000), block)
+
+
+class TestExecutionCoverage(unittest.TestCase):
+    """The line that tells an unmeasured block from a block full of missed sessions."""
+
+    def _store(self):
+        s = store()
+        # A hard interval session, measured.
+        s.upsert_session(activity("i1", "2026-11-10", intensity=0.9))
+        s.set_execution("i1", {"basis": "plan", "reps_done": 3, "reps_planned": 3})
+        # A hard one the add-on had no plan for.
+        s.upsert_session(activity("i2", "2026-11-11", intensity=0.9))
+        s.set_execution("i2", {"basis": "actual_only", "reason": "plan_not_recorded"})
+        # An easy spin, and a walk: neither is a gap in coverage.
+        s.upsert_session(activity("i3", "2026-11-12", intensity=0.6,
+                                  power_zone_mins=[40, 20, 0, 0, 0, 0, 0]))
+        s.set_execution("i3", {"basis": "actual_only", "reason": "unstructured"})
+        s.upsert_session(activity("i4", "2026-11-13", type="Walk", intensity=0.3,
+                                  tss=8, power_zone_mins=[30, 0, 0, 0, 0, 0, 0]))
+        return s
+
+    def test_it_counts_only_sessions_that_wanted_measuring(self):
+        got = self._store()._execution_coverage(
+            self._store().live_sessions(), group_ride_is_hard=False)
+        self.assertIn("1 of 2 measured rep by rep", got)
+        self.assertIn("1 no plan on record", got)
+
+    def test_a_group_ride_is_never_counted(self):
+        s = self._store()
+        s.upsert_session(activity("i5", "2026-11-14", group_ride=True, intensity=0.9))
+        got = s._execution_coverage(s.live_sessions(), group_ride_is_hard=True)
+        self.assertIn("1 of 2 measured rep by rep", got)
+
+    def test_nothing_measurable_renders_nothing(self):
+        s = store()
+        s.upsert_session(activity("i9", "2026-11-10", type="Walk", intensity=0.3,
+                                  power_zone_mins=[30, 0, 0, 0, 0, 0, 0]))
+        self.assertEqual(s._execution_coverage(s.live_sessions(), False), "")
+
+    def test_it_reaches_the_planning_and_recap_blocks(self):
+        s = self._store()
+        for scope in ("planning", "recap"):
+            with self.subTest(scope=scope):
+                self.assertIn("Execution coverage:",
+                              s.render(scope, max_hours=8, max_tss=500))
+
