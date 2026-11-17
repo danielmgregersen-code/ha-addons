@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.8.0
+
+- The coach now sees **12 weeks of history** when planning and when writing the
+  Monday recap, with the **last 8 weeks session by session** — each one carrying
+  how the intervals actually went. Plus 4-week block averages and monthly totals.
+- It also sees your **HRV, resting heart rate, sleep and form week by week**.
+  The add-on stores those itself now, one request a day.
+- **And the recap got cheaper anyway.** It used to be handed the raw wellness
+  data from Intervals.icu on every step of its reasoning — roughly 4,000–5,500
+  tokens a time. Reading the stored trend instead saves more than the extra
+  history costs: about 3,300–4,400 tokens less per recap, for far more context.
+- Fixed a week with no riding showing as "– / – · 0 sessions, 0 hard" instead of
+  just its note. That happened whenever the recap wrote about a week you were
+  ill or away.
+
 ## 1.7.1
 
 - Measuring the intervals in your back catalogue now finishes in about twenty

@@ -482,6 +482,10 @@ def _memory_sweep(activities):
             past = agent.icu.get_events(days_ahead=0, days_back=MEMORY_SWEEP_EVENT_DAYS)
             memory_store.record_plans(past)
             count = memory_store.backfill(history, past)
+            # Wellness in the same pass, so the store is useful from the first
+            # recap rather than filling one day at a time.
+            memory_store.record_wellness(
+                agent.icu.get_wellness(days_back=MEMORY_BACKFILL_DAYS))
             print(f"Training memory backfilled: {count} sessions over "
                   f"{MEMORY_BACKFILL_DAYS} days.", flush=True)
             _save_json_file(MEMORY_SWEEP_STATE_FILE, {"last_date": date.today().isoformat()},
@@ -499,6 +503,10 @@ def _memory_sweep(activities):
         # uploaded today needs its plan available now, not in two days.
         memory_store.record_plans(past)
         memory_store.record_planned(judge_planned(past, sessions, date.today()))
+        # One request a day, parsed here and never handed to the model. The raw
+        # payload measured ~4,100 characters for a single week, re-sent on every
+        # loop iteration of the Monday recap.
+        memory_store.record_wellness(agent.icu.get_wellness(days_back=21))
         if activities:
             since = min((a.get("date") or "9999") for a in activities)
             memory_store.reconcile_deleted([a.get("id") for a in activities], since)

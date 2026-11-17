@@ -184,3 +184,33 @@ class TestExecutionInPrompts(unittest.TestCase):
         agent = make_agent(memory=make_store())
         self.assertIn("TRAINING MEMORY",
                       captured_system(agent, lambda: agent.auto_review({"id": "i1", "type": "Ride"})))
+
+
+class TestRecapToolSwap(unittest.TestCase):
+    """Removing a tool is the risky half of this change, so the fallback is pinned."""
+
+    WELLNESS = [{"id": date.today().isoformat(), "hrv": 60, "restingHR": 47,
+                 "ctl": 70, "atl": 80}]
+
+    def _recap_tools(self, agent):
+        seen = {}
+
+        def fake_loop(**kwargs):
+            seen["tools"] = [t["name"] for t in kwargs["tools"]]
+            return ("ok", {})
+
+        agent._run_response_loop = fake_loop
+        agent.weekly_recap()
+        return seen["tools"]
+
+    def test_the_raw_wellness_fetch_is_dropped_once_memory_can_answer(self):
+        store = make_store()
+        store.record_wellness(self.WELLNESS)
+        self.assertNotIn("get_wellness", self._recap_tools(make_agent(memory=store)))
+
+    def test_it_is_kept_while_the_store_is_empty(self):
+        """A fresh install, or a failed daily fetch, must not leave the recap blind."""
+        self.assertIn("get_wellness", self._recap_tools(make_agent(memory=make_store())))
+
+    def test_it_is_kept_when_there_is_no_store_at_all(self):
+        self.assertIn("get_wellness", self._recap_tools(make_agent(memory=None)))
