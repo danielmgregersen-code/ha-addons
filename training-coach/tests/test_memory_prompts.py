@@ -20,11 +20,18 @@ from memory import MEMORY_SENTINEL, MemoryStore
 MARKER = "7777"   # a TSS value distinctive enough to find in a prompt
 
 
-def make_store(days=14):
+def make_store(days=8):
+    """One session per week, so the weekly rollup equals MARKER exactly.
+
+    Packing several sessions into one week made the marker visible only in the
+    scopes that list sessions individually — planning and recap show weekly SUMS.
+    Whether a week happened to hold exactly one session depended on what day of
+    the week the test ran, so this passed on Mondays and failed on Tuesdays.
+    """
     store = MemoryStore(os.path.join(tempfile.mkdtemp(), "m.json"))
     today = date.today()
     for i in range(days):
-        day = (today - timedelta(days=i + 2)).isoformat()
+        day = (today - timedelta(days=2 + i * 7)).isoformat()
         store.upsert_session({
             "id": f"i{i}", "date": day, "type": "Ride", "name": "Session",
             "duration_seconds": 3600, "tss": int(MARKER), "intensity": 0.7,
