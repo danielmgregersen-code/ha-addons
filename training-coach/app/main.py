@@ -38,8 +38,13 @@ MEMORY_BACKFILL_DAYS = 180   # one HTTP request, parsed in Python, never enterin
 # Events must reach as far back as activities, or the older half of the backfill
 # has no plans to compare against.
 MEMORY_SWEEP_EVENT_DAYS = 180
-MEMORY_EXEC_PER_POLL = 10     # drip rate; a backfill queue drains in ~25 minutes
-MEMORY_EXEC_DAILY_CAP = 60    # a bug here must not become an API hammer
+# Interval measurement is paced by two limits, and only the first should ever bind.
+# At 10 per 120-second poll a ~100-session backfill drains in about 20 minutes; the
+# daily cap is a backstop against a runaway loop, not a throttle. It sat at 60,
+# which stopped the backfill after six polls and stretched it over two days.
+# For scale: the same loop already issues ~720 activity GETs a day.
+MEMORY_EXEC_PER_POLL = 10
+MEMORY_EXEC_DAILY_CAP = 300
 
 chain_manager = ChainManager()
 memory_store = MemoryStore()

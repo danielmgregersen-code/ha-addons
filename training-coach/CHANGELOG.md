@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.1
+
+- Measuring the intervals in your back catalogue now finishes in about twenty
+  minutes instead of two to three days. The pacing limit meant to stop a runaway
+  loop was set low enough that it throttled the one-off backfill as well.
+- The weekly numbers — TSS, hours, RPE, feel, skipped sessions — were never
+  affected: those are complete about two minutes after the add-on starts.
+
 ## 1.7.0
 
 - The coach now records **whether you actually did the intervals**. TSS could
