@@ -28,7 +28,14 @@ MEMORY_SENTINEL = "<<MEMORY>>"
 
 # Hard caps per scope. Enforced by dropping the oldest week, never by truncating
 # mid-string — a half-sentence in a system prompt is worse than one fewer week.
-MAX_CHARS = {"planning": 1800, "review": 800, "recap": 500, "wellness": 600}
+MAX_CHARS = {"planning": 4000, "review": 800, "recap": 4000, "wellness": 600}
+
+# Wellness fields kept from the 47 Intervals.icu returns. Names verified against
+# components.schemas.Wellness in the live spec, not guessed: the repo only ever
+# evidenced sleepScore and sleepSecs, and silently missing the HRV field while
+# removing the live fetch would lose HRV altogether.
+# There is no form/TSB field upstream — it is ctl - atl.
+_WELLNESS_FIELDS = ("hrv", "restingHR", "sleepScore", "sleepSecs", "ctl", "atl")
 
 # Fields the code owns. Anything outside this set (note, note_source, status,
 # source) is model- or sweep-authored and must survive every numeric upsert.
@@ -663,6 +670,7 @@ class MemoryStore:
             "sessions": {},
             "weeks": {},
             "planned": {},
+            "wellness": {},
         }
 
     def _load(self):
@@ -685,7 +693,7 @@ class MemoryStore:
                   f"{SCHEMA_VERSION} — loaded read-only.", flush=True)
         merged = self._empty()
         merged.update(data)
-        for key in ("sessions", "weeks", "planned"):
+        for key in ("sessions", "weeks", "planned", "wellness"):
             if not isinstance(merged.get(key), dict):
                 merged[key] = {}
         self._data = merged
@@ -844,6 +852,43 @@ class MemoryStore:
             if changed:
                 self._save()
         return changed
+
+    def record_wellness(self, rows) -> int:
+        """Store the daily wellness rows the add-on fetches for itself.
+
+        Keeps six fields out of forty-seven and computes form, so the recap can
+        read a trend instead of the model being handed raw upstream JSON — which
+        measured ~4,100 characters for one week, re-sent on every loop iteration.
+        """
+        changed = 0
+        with self._lock:
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    continue
+                day = (row.get("id") or "").strip()[:10]
+                if not day:
+                    continue
+                entry = {}
+                for field in _WELLNESS_FIELDS:
+                    value = _num(row.get(field), 1)
+                    if value is not None:
+                        entry[field] = value
+                if not entry:
+                    continue   # a day with nothing recorded is not worth a row
+                if entry.get("ctl") is not None and entry.get("atl") is not None:
+                    entry["form"] = round(entry["ctl"] - entry["atl"], 1)
+                if self._data["wellness"].get(day) == entry:
+                    continue
+                self._data["wellness"][day] = entry
+                changed += 1
+            if changed:
+                self._save()
+        return changed
+
+    @property
+    def has_wellness(self) -> bool:
+        with self._lock:
+            return bool(self._data.get("wellness"))
 
     def plan_for_event(self, event_id):
         if not event_id:
@@ -1090,6 +1135,13 @@ class MemoryStore:
             cap = ""
             if i == 0 and max_hours and max_tss:
                 cap = f" (cap {max_hours} h / {max_tss} TSS)"
+            if not sessions:
+                # Prose with no rides behind it — a week off sick, or one that
+                # predates coverage. Render the note, never "– / – · 0 sessions".
+                if with_prose and week.get("summary"):
+                    rows.append(f"Wk {monday[5:]}  no sessions recorded")
+                    rows.append(f'    "{week["summary"]}"')
+                continue
             n = week.get("sessions", 0)
             bits = [f"Wk {monday[5:]}", f"{_fmt(week.get('hours'), ' h', 1)} / {_fmt(week.get('tss'), ' TSS')}{cap}",
                     f"{n} session{'' if n == 1 else 's'}, {hard} hard"]
@@ -1109,11 +1161,77 @@ class MemoryStore:
                 rows.append(f'    "{week["summary"]}"')
         return rows
 
+    def _detail_block(self, sessions, group_ride_is_hard, weeks=12, session_weeks=8):
+        """Weekly rollups, then the recent weeks session by session with their
+        interval execution, then monthly totals and the wellness trend.
+
+        Sized against measurement: ~3,600 characters for 12 weeks and 33 sessions,
+        which replaces ~16,600 characters of raw wellness JSON across the loop.
+        """
+        mondays = sorted(self._data["weeks"])[-weeks:][::-1]
+        lines = self._week_rows(mondays, group_ride_is_hard, with_prose=3, with_exec=True)
+
+        tss_by_week = [self._data["weeks"].get(m, {}).get("tss") for m in mondays[::-1]]
+        blocks = [tss_by_week[i:i + 4] for i in range(0, len(tss_by_week), 4)]
+        averages = [_avg([t for t in b if t]) for b in blocks]
+        averages = [a for a in averages if a is not None]
+        if len(averages) > 1:
+            lines.append("Block averages (oldest→newest, 4-wk): "
+                         + " · ".join(f"{_fmt(a)} TSS/wk" for a in averages))
+
+        detail_weeks = set(mondays[:session_weeks])
+        recent = [s for s in sessions if self._monday_for(s.get("date")) in detail_weeks]
+        if recent:
+            lines.append(f"\nSession by session, last {session_weeks} weeks:")
+            for session in recent:
+                lines.append(
+                    f"  {session.get('date', '')[5:]} "
+                    f"{(session.get('name') or session.get('type') or 'session')[:22]:22} "
+                    f"{_fmt(session.get('duration_min'), 'm')}/{_fmt(session.get('tss'))} "
+                    f"rpe{_fmt(session.get('rpe'))} feel{_fmt(session.get('feel'))}"
+                    + _exec_tag(session.get("exec"))
+                    + (f" — {session['note']}" if session.get("note") else ""))
+
+        months = {}
+        for session in sessions:
+            months.setdefault((session.get("date") or "")[:7], []).append(session)
+        months.pop("", None)
+        if len(months) > 1:
+            lines.append("\nBy month: " + " · ".join(
+                f"{month[5:]} {round(sum(x.get('tss') or 0 for x in rows))} TSS/{len(rows)} sess"
+                for month, rows in sorted(months.items())))
+
+        trend = self._wellness_rows(mondays[:session_weeks])
+        if trend:
+            lines.append("Wellness by week (avg): " + " · ".join(trend))
+        return lines
+
+    def _wellness_rows(self, mondays):
+        """Weekly HRV / resting HR / sleep / form averages from the stored rows."""
+        out = []
+        for monday in mondays:
+            try:
+                start = date.fromisoformat(monday)
+            except (TypeError, ValueError):
+                continue
+            days = {(start + timedelta(days=i)).isoformat() for i in range(7)}
+            rows = [r for d, r in self._data.get("wellness", {}).items() if d in days]
+            if not rows:
+                continue
+            bits = []
+            for field, label in (("hrv", "hrv"), ("restingHR", "rhr"),
+                                 ("sleepScore", "sleep"), ("form", "form")):
+                value = _avg([r.get(field) for r in rows], 0)
+                if value is not None:
+                    bits.append(f"{label} {_fmt(value)}")
+            if bits:
+                out.append(f"{monday[5:]} " + " ".join(bits))
+        return out
+
     def _render_planning(self, sessions, group_ride_is_hard, max_hours, max_tss):
-        mondays = sorted(self._data["weeks"])[-8:][::-1]
+        mondays = sorted(self._data["weeks"])[-12:][::-1]
         lines = [self._header(" Authoritative for closed weeks; do not re-fetch them.")]
-        lines += self._week_rows(mondays, group_ride_is_hard, with_prose=3,
-                                 max_hours=max_hours, max_tss=max_tss, with_exec=True)
+        lines += self._detail_block(sessions, group_ride_is_hard)
         recent = [self._data["weeks"].get(m, {}).get("tss") for m in mondays[::-1]]
         recent = [t for t in recent if t]
         if len(recent) >= 2:
@@ -1226,9 +1344,11 @@ class MemoryStore:
         return "\n".join(lines)
 
     def _render_recap(self, sessions):
-        mondays = sorted(self._data["weeks"])[-4:-1][::-1]
-        if not mondays:
+        """The recap compares this week against the block behind it, so it gets the
+        same detail as planning — including the wellness trend, which replaces the
+        raw get_wellness payload it used to be handed on every iteration."""
+        if not self._data["weeks"]:
             return ""
-        lines = [self._header(" Previous weeks, for comparison.")]
-        lines += self._week_rows(mondays, False, with_prose=3)
+        lines = [self._header(" The weeks behind the one you are recapping.")]
+        lines += self._detail_block(sessions, False)
         return "\n".join(lines)

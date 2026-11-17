@@ -312,6 +312,8 @@ _WELLNESS_READINESS_TOOL_NAMES = {"get_training_readiness", "get_planned_workout
 _WELLNESS_TOOL_NAMES = {"get_wellness", "get_planned_workouts"}
 
 _RECAP_TOOLS = [t for t in TOOLS if t["name"] in _RECAP_TOOL_NAMES]
+# The same set without the raw wellness dump, used once memory holds the trend.
+_RECAP_TOOLS_NO_WELLNESS = [t for t in _RECAP_TOOLS if t["name"] != "get_wellness"]
 _WELLNESS_READINESS_TOOLS = [t for t in TOOLS if t["name"] in _WELLNESS_READINESS_TOOL_NAMES]
 _WELLNESS_TOOLS = [t for t in TOOLS if t["name"] in _WELLNESS_TOOL_NAMES]
 
@@ -726,7 +728,7 @@ Your task: generate a structured weekly recap for the past 7 days.
 
 Steps:
 1. Call get_recent_activities(days_back=7) to see what was completed
-2. Call get_wellness(days_back=7) to get the HRV/RHR/fatigue trend
+2. The weekly HRV, resting-HR, sleep and form trend is already in the memory block above — read it there. Only call get_wellness if no such trend is present
 3. Call get_planned_workouts(days_ahead=0) — this won't return past events; use what activities returned to compare planned vs actual based on compliance fields
 
 Structure your recap as follows:
@@ -1429,10 +1431,16 @@ class TrainingAgent:
             {"role": "system", "content": system},
             {"role": "user", "content": "Generate this week's training recap."},
         ]
+        # Drop the raw wellness fetch only once the store can answer instead.
+        # Without this fallback a fresh install, or a failed daily fetch, would
+        # leave the recap with no wellness data and no way to get any.
+        tools = (_RECAP_TOOLS_NO_WELLNESS
+                 if self.memory is not None and getattr(self.memory, "has_wellness", False)
+                 else _RECAP_TOOLS)
         return self._run_response_loop(
             model=self.auto_review_model,
             input_items=messages,
-            tools=_RECAP_TOOLS,
+            tools=tools,
             max_iterations=20,
             label="Weekly recap tool loop",
         )

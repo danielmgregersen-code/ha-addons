@@ -295,9 +295,30 @@ class TestRender(unittest.TestCase):
         self.assertIn("How to use TRAINING MEMORY", s.render("planning", max_hours=8, max_tss=500))
         self.assertNotIn("How to use TRAINING MEMORY", s.render("review"))
 
-    def test_planning_windows_to_eight_weeks(self):
+    def test_planning_windows_to_twelve_weeks(self):
         s = self._populated()
-        self.assertLessEqual(s.render("planning", max_hours=8, max_tss=500).count("Wk "), 8)
+        self.assertEqual(s.render("planning", max_hours=8, max_tss=500).count("Wk "), 12)
+
+    def test_the_detail_block_lists_sessions_for_the_last_eight_weeks(self):
+        """12 weeks of rollups, 8 of them session by session — the rest stay summarised
+        so the block does not grow without bound."""
+        s = self._populated()
+        for scope in ("planning", "recap"):
+            text = s.render(scope, max_hours=8, max_tss=500)
+            with self.subTest(scope=scope):
+                self.assertIn("Session by session, last 8 weeks:", text)
+                self.assertIn("By month:", text)
+
+    def test_a_week_with_prose_but_no_rides_renders_no_dashes(self):
+        """A week off sick carries a recap summary and no sessions. It used to render
+        "– / – · 0 sessions, 0 hard · RPE – feel –"."""
+        s = store()
+        s.upsert_session(activity("i1", "2026-11-10"))
+        s.set_week_summary("2026-11-02", "Off sick all week, no riding.")
+        text = s.render("recap", max_hours=8, max_tss=500)
+        self.assertIn("Off sick all week", text)
+        self.assertIn("no sessions recorded", text)
+        self.assertNotIn("0 sessions, 0 hard", text)
 
     def test_no_none_leaks_into_a_prompt(self):
         s = store()
@@ -341,3 +362,61 @@ class TestBackfill(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWellnessStore(unittest.TestCase):
+    """Field names come from the live Intervals.icu spec (components.schemas.Wellness),
+    not from guesswork: the repo only ever evidenced sleepScore and sleepSecs, and a
+    wrong HRV name would have lost HRV entirely once the live fetch was removed."""
+
+    def rows(self, **over):
+        base = {"id": "2026-11-10", "hrv": 61.2, "restingHR": 47, "sleepScore": 82.0,
+                "sleepSecs": 27000, "ctl": 72.4, "atl": 88.1}
+        base.update(over)
+        return [base]
+
+    def test_kept_fields_and_computed_form(self):
+        s = store()
+        self.assertEqual(s.record_wellness(self.rows()), 1)
+        row = s._data["wellness"]["2026-11-10"]
+        self.assertEqual(row["hrv"], 61.2)
+        self.assertEqual(row["restingHR"], 47)
+        self.assertEqual(row["form"], round(72.4 - 88.1, 1))   # no TSB field upstream
+
+    def test_the_other_forty_fields_are_dropped(self):
+        s = store()
+        s.record_wellness(self.rows(weight=74.1, spO2=97, menstrualPhase="x", comments="hi"))
+        self.assertEqual(set(s._data["wellness"]["2026-11-10"]),
+                         {"hrv", "restingHR", "sleepScore", "sleepSecs", "ctl", "atl", "form"})
+
+    def test_missing_values_are_absent_not_null(self):
+        s = store()
+        s.record_wellness([{"id": "2026-11-10", "hrv": 60}])
+        row = s._data["wellness"]["2026-11-10"]
+        self.assertEqual(row, {"hrv": 60})
+        self.assertNotIn("form", row)
+
+    def test_an_empty_day_is_not_stored(self):
+        s = store()
+        self.assertEqual(s.record_wellness([{"id": "2026-11-10"}, {"no_id": 1}, None]), 0)
+        self.assertEqual(s._data["wellness"], {})
+
+    def test_unchanged_rows_write_nothing(self):
+        s = store()
+        s.record_wellness(self.rows())
+        before = s.writes
+        self.assertEqual(s.record_wellness(self.rows()), 0)
+        self.assertEqual(s.writes, before)
+
+    def test_has_wellness_gates_the_recap_tool_swap(self):
+        s = store()
+        self.assertFalse(s.has_wellness)
+        s.record_wellness(self.rows())
+        self.assertTrue(s.has_wellness)
+
+    def test_the_trend_renders_into_the_block(self):
+        s = store()
+        s.upsert_session(activity("i1", "2026-11-10"))
+        s.record_wellness([{"id": f"2026-11-{10 + i}", "hrv": 60 + i, "restingHR": 47}
+                           for i in range(5)])
+        self.assertIn("Wellness by week", s.render("recap", max_hours=8, max_tss=500))
