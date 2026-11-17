@@ -13,6 +13,7 @@ import tempfile
 import unittest
 
 from memory import (
+    EXEC_VERSION,
     MemoryStore,
     _duration_seconds,
     _exec_tag,
@@ -20,6 +21,7 @@ from memory import (
     compare_execution,
     execution_sentence,
     parse_planned_workout,
+    plan_text,
 )
 
 PLAN_TEXT = """Warmup
@@ -246,9 +248,19 @@ class TestStore(unittest.TestCase):
         s = self.store()
         s.upsert_session(self._activity())
         self.assertTrue(s.needs_execution("i1", tss=98))
-        s.set_execution("i1", {"basis": "plan", "tss": 98})
+        s.set_execution("i1", {"v": EXEC_VERSION, "basis": "plan", "tss": 98})
         self.assertFalse(s.needs_execution("i1", tss=98))
         self.assertTrue(s.needs_execution("i1", tss=140))   # re-upload self-heals
+
+    def test_a_record_from_an_older_schema_is_remeasured(self):
+        """The raw interval payload is not kept, so a richer record can only be
+        rebuilt by fetching again — the drip picks these up by version."""
+        s = self.store()
+        s.upsert_session(self._activity())
+        s.set_execution("i1", {"v": EXEC_VERSION - 1, "basis": "plan", "tss": 98})
+        self.assertTrue(s.needs_execution("i1", tss=98))
+        s.set_execution("i1", {"v": EXEC_VERSION, "basis": "plan", "tss": 98})
+        self.assertFalse(s.needs_execution("i1", tss=98))
 
     def test_failures_stop_retrying(self):
         s = self.store()
@@ -276,3 +288,63 @@ class TestStore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPlannedStructureAndReps(unittest.TestCase):
+    """What the review was missing: what was prescribed, and how many landed."""
+
+    def test_plan_text_one_set(self):
+        self.assertEqual(plan_text(plan()), "3x15m@88-92%")
+
+    def test_plan_text_two_sets(self):
+        two = parse_planned_workout(
+            "Set 1 4x\n- VO2max 3m 118-122%\n- Recovery 3m 50-60%\n\n"
+            "Set 2 2x\n- Threshold 8m 98-102%\n- Recovery 4m 50-60%")
+        self.assertEqual(plan_text(two), "4x3m@118-122% + 2x8m@98-102%")
+
+    def test_plan_text_handles_watt_targets_and_no_plan(self):
+        watts = parse_planned_workout("Main set 2x\n- Effort 10m 250-280w\n- Recovery 5m 50-60%")
+        self.assertEqual(plan_text(watts), "2x10m@250-280w")
+        self.assertEqual(plan_text(None), "")
+
+    def test_the_record_carries_the_plan_and_each_rep(self):
+        got = compare_execution(plan(), payload(
+            [iv(900, 228, 91), iv(900, 222, 89), iv(900, 209, 84)], count=3))
+        self.assertEqual(got["plan_text"], "3x15m@88-92%")
+        self.assertEqual(got["reps"], [228, 222, 209])
+        self.assertEqual(got["rep_unit"], "W")
+        self.assertEqual(got["v"], EXEC_VERSION)
+
+    def test_the_tag_answers_both_questions(self):
+        got = compare_execution(plan(), payload(
+            [iv(900, 228, 91), iv(900, 222, 89), iv(900, 209, 84)], count=3))
+        tag = _exec_tag(got)
+        self.assertIn("3x15m@88-92%", tag)      # what was planned
+        self.assertIn("2✓", tag)                # how many landed
+        self.assertIn("228/222/209W", tag)      # what each rep held
+
+    def test_a_long_set_is_summarised_not_dumped(self):
+        """A 10x1min session would otherwise crowd a week of others out of the block."""
+        got = compare_execution(
+            parse_planned_workout("Main set 10x\n- VO2 1m 118-122%\n- Recovery 1m 50-60%"),
+            payload([iv(60, 300 - i, 120 - i) for i in range(10)], count=10))
+        tag = _exec_tag(got)
+        self.assertIn("+4 more", tag)
+        self.assertLess(len(tag), 90)
+
+    def test_a_session_without_power_falls_back_to_percentages(self):
+        got = compare_execution(plan(), payload(
+            [iv(900, None, 91), iv(900, None, 89), iv(900, None, 88)], count=3))
+        self.assertEqual(got.get("rep_unit"), "%")
+        self.assertNotIn("None", _exec_tag(got))
+
+    def test_no_power_and_no_percentage_renders_no_rep_fragment(self):
+        got = compare_execution(plan(), payload(
+            [iv(900, None, None), iv(900, None, None), iv(900, None, None)], count=3))
+        self.assertNotIn("reps", got)
+        self.assertNotIn("None", _exec_tag(got))
+
+    def test_the_auto_review_note_leads_with_what_was_prescribed(self):
+        got = compare_execution(plan(), payload(
+            [iv(900, 228, 91), iv(900, 222, 89)], count=2))
+        self.assertIn("prescribed 3x15m@88-92%", execution_sentence(got))

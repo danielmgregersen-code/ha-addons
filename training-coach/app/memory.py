@@ -28,7 +28,15 @@ MEMORY_SENTINEL = "<<MEMORY>>"
 
 # Hard caps per scope. Enforced by dropping the oldest week, never by truncating
 # mid-string — a half-sentence in a system prompt is worse than one fewer week.
-MAX_CHARS = {"planning": 4000, "review": 800, "recap": 4000, "wellness": 600}
+MAX_CHARS = {"planning": 5000, "review": 800, "recap": 5000, "wellness": 600}
+
+# Execution record schema. Bumping it makes needs_execution re-measure every stored
+# session through the existing drip — the raw interval payloads are not kept, so a
+# richer record can only be rebuilt by fetching again.
+EXEC_VERSION = 2
+# Beyond this many reps the per-rep list is summarised: a 10x1min VO2 session would
+# otherwise crowd a week of other sessions out of the block when _fit starts trimming.
+MAX_RENDERED_REPS = 6
 
 # Wellness fields kept from the 47 Intervals.icu returns. Names verified against
 # components.schemas.Wellness in the live spec, not guessed: the repo only ever
@@ -380,7 +388,7 @@ def compare_execution(plan, payload, ftp=None, trainer=False):
     number of pieces — a lap pressed late, two reps merged, one split — and no rep
     shortfall is reported at all. A wrong "you missed two reps" is worse than silence.
     """
-    out = {"v": 1, "erg": bool(trainer)}
+    out = {"v": EXEC_VERSION, "erg": bool(trainer)}
     efforts = _work_intervals(payload)
     if not efforts:
         return {**out, "basis": "none", "reason": "no_intervals"}
@@ -459,6 +467,13 @@ def compare_execution(plan, payload, ftp=None, trainer=False):
               "reps_planned": reps_planned, "reps_done": len(pool),
               "short_reps": short, "work_min": round(actual_work / 60),
               "label": sets[0]["label"]}
+    prescribed = plan_text(plan)
+    if prescribed:
+        result["plan_text"] = prescribed
+    values, unit = _rep_values(pool, ftp)
+    if values:
+        result["reps"] = values
+        result["rep_unit"] = unit
     if band and not band.get("ramp") and unknown * 3 <= len(pool):
         result["target_hit"] = hits
         midpoint = (band["low"] + band["high"]) / 2
@@ -609,7 +624,10 @@ def execution_sentence(record) -> str:
                 "established for this ride — do not state one.")
     if basis != "plan":
         return ""
-    bits = [f"{record.get('reps_done')} of {record.get('reps_planned')} reps"]
+    bits = []
+    if record.get("plan_text"):
+        bits.append(f"prescribed {record['plan_text']}")
+    bits.append(f"{record.get('reps_done')} of {record.get('reps_planned')} reps")
     if record.get("target_hit") is not None:
         bits.append(f"{record['target_hit']} on target"
                     + (f" (median {record['target_rel']}% of the band)"
@@ -626,6 +644,41 @@ def execution_sentence(record) -> str:
     return sentence + " Treat these as given; call get_activity_intervals only for detail beyond them."
 
 
+def plan_text(plan) -> str:
+    """The prescribed structure, compactly: "3x15m@88-92%", or two sets joined by +.
+
+    The comparison already parses this and then threw it away, so the review could
+    say how many reps landed but never what was asked for.
+    """
+    bits = []
+    for item in (plan or {}).get("sets") or []:
+        minutes = round((item.get("work_seconds") or 0) / 60)
+        if not minutes:
+            continue
+        band = item.get("band") or {}
+        if band.get("unit") == "pct":
+            target = f"@{band['low']}-{band['high']}%" if band["low"] != band["high"] else f"@{band['low']}%"
+        elif band.get("unit") == "w":
+            target = f"@{band['low']}-{band['high']}w" if band["low"] != band["high"] else f"@{band['low']}w"
+        else:
+            target = ""
+        bits.append(f"{item.get('reps', 1)}x{minutes}m{target}")
+    return " + ".join(bits)
+
+
+def _rep_values(efforts, ftp):
+    """Per-rep average watts in order, or intensity percentages when there is no
+    power. Returns (values, unit) — ("", "") when neither exists, so a run or a
+    dropout never renders "None"."""
+    watts = [_num(i.get("avg_power")) for i in efforts]
+    if all(w for w in watts):
+        return watts, "W"
+    pcts = [_rep_pct(i, ftp) for i in efforts]
+    if all(p for p in pcts):
+        return [round(p) for p in pcts], "%"
+    return [], ""
+
+
 def _exec_tag(record) -> str:
     """Short execution tag for a session line, or "" when nothing is established.
 
@@ -635,8 +688,21 @@ def _exec_tag(record) -> str:
     """
     if not record or record.get("basis") != "plan":
         return ""
-    bits = [f"{record.get('reps_done')}/{record.get('reps_planned')}"]
-    if record.get("target_rel") is not None:
+    bits = []
+    if record.get("plan_text"):
+        bits.append(record["plan_text"])
+    bits.append(f"{record.get('reps_done')}/{record.get('reps_planned')}")
+    if record.get("target_hit") is not None:
+        # The count the review prompt always claimed was here and never was.
+        bits.append(f"{record['target_hit']}\u2713")
+    values = record.get("reps") or []
+    if values:
+        shown = values[:MAX_RENDERED_REPS]
+        rendered = "/".join(f"{v:g}" for v in shown) + record.get("rep_unit", "")
+        if len(values) > MAX_RENDERED_REPS:
+            rendered += f"+{len(values) - MAX_RENDERED_REPS} more"
+        bits.append(rendered)
+    elif record.get("target_rel") is not None:
         bits.append(f"@{record['target_rel']}%")
     if record.get("fade_pct") is not None:
         bits.append(f"fade {record['fade_pct']:+g}%")
@@ -796,6 +862,8 @@ class MemoryStore:
             record = session.get("exec")
             if not record:
                 return True
+            if (record.get("v") or 1) < EXEC_VERSION:
+                return True   # richer record; only a refetch can rebuild it
             if record.get("basis") == "pending":
                 return (record.get("attempts") or 0) < 3
             stored_tss = record.get("tss")
@@ -810,11 +878,14 @@ class MemoryStore:
         with self._lock:
             session = self._data["sessions"].setdefault(
                 sid, {"id": sid, "source": "live", "deleted": False})
-            record = session.get("exec") or {"v": 1, "basis": "pending", "attempts": 0}
+            record = session.get("exec") or {"v": EXEC_VERSION, "basis": "pending", "attempts": 0}
             attempts = (record.get("attempts") or 0) + 1
-            session["exec"] = ({"v": 1, "basis": "none", "reason": "fetch_failed"}
+            # Stamped with the CURRENT version: a hardcoded 1 would read as stale
+            # after every schema bump, so a permanently unfetchable session would be
+            # retried three times per poll, forever.
+            session["exec"] = ({"v": EXEC_VERSION, "basis": "none", "reason": "fetch_failed"}
                                if attempts >= 3 else
-                               {"v": 1, "basis": "pending", "attempts": attempts})
+                               {"v": EXEC_VERSION, "basis": "pending", "attempts": attempts})
             self._save()
 
     def sessions_needing_execution(self, limit: int = 10):

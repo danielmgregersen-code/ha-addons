@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.9.0
+
+- Session reviews now show **what was prescribed and how many reps landed**, not
+  just a rep count. A session reads
+  `ex 3x15m@88-92% 3/3 2✓ 228/222/209W fade -8.3%`: three 15-minute reps at
+  88–92% FTP were planned, three were done, two landed in the band, and the last
+  was 8.3% down on the first.
+- The watts held in each rep are recorded too, so the coach can discuss a single
+  session without fetching its intervals again.
+- The auto-review note now opens with the prescribed structure, so it reads as
+  "you were down for 3x15 at 88–92% and held two of them".
+- Your existing sessions are re-measured automatically over about twenty minutes
+  after the update, since the per-rep figures were never stored before.
+- Fixed the review instructions claiming the stored tags listed targets hit when
+  they did not.
+
 ## 1.8.0
 
 - The coach now sees **12 weeks of history** when planning and when writing the
