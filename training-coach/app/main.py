@@ -452,6 +452,14 @@ def _execution_for(activity) -> None:
                     for s in plan.get("sets") or []):
         ftp = _ftp_for(activity.get("type"))
     record = compare_execution(plan, payload, ftp=ftp, trainer=bool(activity.get("trainer")))
+    if record.get("reason") == "no_plan":
+        # Which of the three it was: never paired to a planned workout, the plan was
+        # never recorded, or its text could not be parsed. compare_execution cannot
+        # tell them apart, and "no plan" covering all three is what made a recording
+        # gap look like an unmeasurable ride.
+        record["reason"] = memory_store.plan_status(event_id) or "no_plan"
+        if record["reason"] == "ok":
+            record["reason"] = "no_plan"
     record["tss"] = activity.get("tss")
     if event_id:
         record["event_id"] = str(event_id)
@@ -486,11 +494,30 @@ def _memory_sweep(activities):
             # recap rather than filling one day at a time.
             memory_store.record_wellness(
                 agent.icu.get_wellness(days_back=MEMORY_BACKFILL_DAYS))
+            memory_store.mark_migration("plans_180d")
+            memory_store.mark_migration("wellness_180d")
             print(f"Training memory backfilled: {count} sessions over "
                   f"{MEMORY_BACKFILL_DAYS} days.", flush=True)
             _save_json_file(MEMORY_SWEEP_STATE_FILE, {"last_date": date.today().isoformat()},
                             "could not save memory sweep state")
             return
+
+        # One-off work that postdates this store's backfill. These used to sit inside
+        # the branch above, gated on a flag the 1.6.0 backfill had already spent — so
+        # on an existing install the 180-day plan recording and the wellness history
+        # never ran at all, and every session older than the daily sweep's fortnight
+        # had no plan to be measured against. Named markers, one request each.
+        if memory_store.needs_migration("plans_180d"):
+            memory_store.record_plans(
+                agent.icu.get_events(days_ahead=0, days_back=MEMORY_SWEEP_EVENT_DAYS))
+            memory_store.mark_migration("plans_180d")
+            print(f"Training memory: planned workouts recorded over "
+                  f"{MEMORY_SWEEP_EVENT_DAYS} days.", flush=True)
+        if memory_store.needs_migration("wellness_180d"):
+            memory_store.record_wellness(
+                agent.icu.get_wellness(days_back=MEMORY_BACKFILL_DAYS))
+            memory_store.mark_migration("wellness_180d")
+            print("Training memory: wellness history recorded.", flush=True)
 
         today = date.today().isoformat()
         if _load_json_file(MEMORY_SWEEP_STATE_FILE, {}).get("last_date") == today:
@@ -979,6 +1006,10 @@ def debug_storage():
         "session_names_in_memory": session_names,
         "config_dir_accessible": os.path.exists("/config"),
         "config_dir_writable": os.access("/config", os.W_OK),
+        "memory": memory_store.stats(),
+        # Why sessions are or are not measured rep by rep, by verdict and reason.
+        # Previously only inferable from what the prompts happened to render.
+        "memory_execution": memory_store.execution_breakdown(),
     }
 
 
