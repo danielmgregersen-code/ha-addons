@@ -18,6 +18,29 @@ def _readiness_band(score: float) -> str:
     return "prime"
 
 
+def _alert_requested(text: str) -> bool:
+    """Whether the morning check asked for an alert.
+
+    The token used to be matched with startswith() on the raw text, so a bold
+    "**[ALERT]**", a leading quotation mark or a markdown heading turned a poor
+    readiness day into a silent one. Reads the first few lines and takes whichever
+    token appears first.
+    """
+    seen = 0
+    for line in (text or "").splitlines():
+        stripped = line.strip().strip("*_`>#\"' ").upper()
+        if not stripped:
+            continue
+        if "[ALERT]" in stripped or stripped == "ALERT":
+            return True
+        if "[OK]" in stripped or stripped == "OK":
+            return False
+        seen += 1
+        if seen >= 3:
+            break
+    return False
+
+
 def _fmt_feedback(value):
     """Render Garmin's enum-style feedback (e.g. VERY_GOOD,
     ENERGIZED_BY_GOOD_SLEEP) as lowercase words; pass non-strings through."""
@@ -278,11 +301,60 @@ TOOLS = [
             "required": ["event_id"],
         },
     },
+    {
+        "type": "function",
+        "strict": False,
+        "name": "record_memo",
+        "description": (
+            "Record one sentence for the athlete's long-term training memory. Call this "
+            "exactly once, after your review or recap text. It is read months later with "
+            "no access to today's data, so say what was executed or missed and what should "
+            "change next time — not a score, not a restatement of the numbers."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string",
+                         "description": "One sentence, at most 200 characters."},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "type": "function",
+        "strict": False,
+        "name": "propose_review_post",
+        "description": (
+            "Offer the athlete a button to post your review as the coach comment on ONE "
+            "activity. Call it once, after a complete review of a single activity, and "
+            "never for a multi-ride discussion. Pass the activity's `id` field as it "
+            "appears in the data, including any leading letter."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "activity_id": {"type": "string",
+                                "description": "The activity id, e.g. i172850190."},
+                "tick": {"type": "integer",
+                         "description": "Coach tick 1-5. Omit when the athlete has no "
+                                        "coach ticks configured."},
+            },
+            "required": ["activity_id"],
+        },
+    },
 ]
 
 _REVIEW_TOOL_NAMES = {
     "get_recent_activities", "get_activity_intervals", "get_planned_workout",
-    "get_coach_ticks", "post_activity_comment",
+    "get_coach_ticks", "post_activity_comment", "propose_review_post",
+}
+# The nightly review posts a comment and records a memo. It used to be handed the
+# FULL tool list — including create, update and delete_planned_workout — so an
+# unattended run could rewrite the calendar. 1.1.59 narrowed the chat modes and
+# missed this path.
+_AUTO_REVIEW_TOOL_NAMES = {
+    "get_recent_activities", "get_activity_intervals", "get_planned_workout",
+    "get_coach_ticks", "post_activity_comment", "record_memo",
 }
 _HEALTH_TOOL_NAMES = {
     "get_wellness", "get_coach_ticks",
@@ -306,16 +378,20 @@ TOOLS_BY_MODE = {
 _HEALTH_READINESS_TOOLS = [t for t in TOOLS if t["name"] in _HEALTH_READINESS_TOOL_NAMES]
 
 _RECAP_TOOL_NAMES = {
-    "get_recent_activities", "get_wellness", "get_planned_workouts", "get_coach_ticks",
+    "get_recent_activities", "get_wellness", "get_coach_ticks", "record_memo",
 }
 _WELLNESS_READINESS_TOOL_NAMES = {"get_training_readiness", "get_planned_workouts"}
 _WELLNESS_TOOL_NAMES = {"get_wellness", "get_planned_workouts"}
 
+_AUTO_REVIEW_TOOLS = [t for t in TOOLS if t["name"] in _AUTO_REVIEW_TOOL_NAMES]
 _RECAP_TOOLS = [t for t in TOOLS if t["name"] in _RECAP_TOOL_NAMES]
 # The same set without the raw wellness dump, used once memory holds the trend.
 _RECAP_TOOLS_NO_WELLNESS = [t for t in _RECAP_TOOLS if t["name"] != "get_wellness"]
 _WELLNESS_READINESS_TOOLS = [t for t in TOOLS if t["name"] in _WELLNESS_READINESS_TOOL_NAMES]
 _WELLNESS_TOOLS = [t for t in TOOLS if t["name"] in _WELLNESS_TOOL_NAMES]
+# Same trade as the recap: the stored wellness answers it, and the raw fetch stays
+# available for a fresh install or a failed daily sync.
+_WELLNESS_TOOLS_NO_WELLNESS = [t for t in _WELLNESS_TOOLS if t["name"] != "get_wellness"]
 
 # Fail loudly at import rather than silently shipping a short tool list. Catches a
 # flattening mistake, a duplicate name, and — most valuably — a typo in any of the
@@ -326,7 +402,7 @@ assert all(t["type"] == "function" and "parameters" in t and t.get("strict") is 
            for t in TOOLS), "TOOLS must use the flat /v1/responses shape with strict=False"
 for _set in (_REVIEW_TOOL_NAMES, _HEALTH_TOOL_NAMES, _HEALTH_READINESS_TOOL_NAMES,
              _PLANNING_TOOL_NAMES, _RECAP_TOOL_NAMES, _WELLNESS_READINESS_TOOL_NAMES,
-             _WELLNESS_TOOL_NAMES):
+             _WELLNESS_TOOL_NAMES, _AUTO_REVIEW_TOOL_NAMES):
     assert _set <= _TOOL_NAMES, f"unknown tool name(s): {_set - _TOOL_NAMES}"
 
 
@@ -480,84 +556,101 @@ def group_ride_flag_context(level: str, factors: dict | None = None,
     )
 
 
-AUTO_REVIEW_SYSTEM_PROMPT = """You are an expert cycling coach reviewing a recently completed ride.
-You have direct access to the athlete's training data via Intervals.icu.
+# ── Shared prompt fragments ──
+# One definition each. These were copied into every prompt and had already drifted:
+# polarization_index existed only in the review copy, and the decoupling wording
+# differed between two prompts describing the same number.
 
-Today's date: {today}
-{memory_context}
-
-Metric reference:
+_METRIC_REFERENCE = """Metric reference:
 - feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
 - power_zone_mins: array of minutes in [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
 - hr_zone_mins: array of minutes in [Z1, Z2, Z3, Z4, Z5]
-- decoupling: <5% well-coupled, 5–10% normal, >10% suggests fatigue or heat
-- efficiency_factor: power/HR ratio — higher is more aerobically efficient
-- variability_index: NP/AP — closer to 1.0 means steady effort
-- compliance >0 means the ride matched a planned workout — call get_planned_workout(paired_event_id) to compare actual vs planned
-{group_ride_context}
-- Sweet spot ~84–97% FTP overlaps Z3 and Z4 — never count it as a separate zone
+- decoupling: aerobic decoupling % — HR drift vs power; <5% well-coupled, 5-10% normal, >10% suggests fatigue or heat
+- efficiency_factor: power/HR ratio — higher is more aerobically efficient; a rising trend is positive
+- variability_index: NP/AP — closer to 1.0 means steady effort, higher means variable pacing
+- polarization_index: distribution between low and high intensity
+- Sweet spot (~84-97% FTP) overlaps Z3 and Z4 — it is NOT a separate zone. Never list it on top of Z3/Z4 totals"""
 
-FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
-Pick the sport_settings entry whose `sports` list contains this activity's `type` — never judge a run against ride FTP or ride LTHR. If no entry covers that sport, or the value is null, say the threshold is not configured rather than using another sport's.
+_THRESHOLD_RULE = """FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
+Pick the sport_settings entry whose `sports` list contains this activity's `type` — never judge a run against ride FTP or ride LTHR. If no entry covers that sport, or the value is null, say the threshold is not configured rather than using another sport's."""
+
+_DETECTED_INTERVALS_RULE = """Auto-detected intervals capture only the hard efforts the device flagged. Gaps between detected intervals are NOT necessarily recovery — never label them as such unless low power/HR/intensity_pct actually supports it. Describe what the data shows, not a structure you have assumed."""
+
+_TICK_SCALE = "1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing"
+
+# Every loop iteration re-sends the whole input list, so a stuck loop gets more
+# expensive each turn. An iteration count alone does not bound the cost; this does.
+MAX_LOOP_TOKENS = 200_000
+# A runaway-output guard, not a limiter: reasoning tokens count towards it.
+MAX_OUTPUT_TOKENS = 16_000
+# Per-request ceiling. The chat endpoint gives up on its per-session lock after
+# 300 s, so an unbounded request would leave the next one failing on the lock
+# instead of on the model. One retry, so the worst case stays bounded.
+OPENAI_TIMEOUT_SECONDS = 300.0
+OPENAI_MAX_RETRIES = 1
+
+_TICK_RULE = ("judged on TSS vs expected load, RPE, feel, interval execution and decoupling. "
+              "If the coach_ticks list is empty, post the comment without a tick_id — never refuse to comment.")
+
+# The memory block and the date are the only parts that change between calls, so
+# they go LAST. Prompt caching matches on a prefix, so a volatile block near the top
+# invalidates the cache for every static rule below it.
+_MEMORY_FOOTER = """
+
+Today's date: {today}
+{memory_context}"""
+
+
+AUTO_REVIEW_SYSTEM_PROMPT = ("""You are an expert cycling coach reviewing a recently completed ride.
+You have direct access to the athlete's training data via Intervals.icu.
+
+""" + _METRIC_REFERENCE + """
+- compliance > 0 means the ride matched a planned workout
+{group_ride_context}
+
+""" + _THRESHOLD_RULE + """
 
 For MATCHED workouts (compliance > 0): focus on interval execution — did efforts hit targets, how consistent were the reps, power/HR per interval. Cover zone distribution briefly.
 For UNMATCHED rides: equal weight to interval efforts and zone distribution.
 
-Auto-detected intervals capture only the hard efforts the device flagged. Gaps between detected intervals are NOT necessarily recovery — never assume or label them as such. Describe what the metrics show (power, HR, intensity_pct) rather than inferring a structure that may not exist.
-When the user message supplies measured execution for this ride, those numbers were computed from the device intervals against the workout this add-on planned — treat them as given and do not contradict them with your own count. When it says execution could not be established, do not guess at one.
+""" + _DETECTED_INTERVALS_RULE + """
+When the user message supplies measured execution for this ride, those numbers were computed by this add-on from the device intervals against the workout it planned. Treat them as given: do not re-count the reps and do not contradict them. When it says execution could not be established, do not guess at one. Fetch the planned workout or the intervals only for detail those numbers do not carry.
 
-When posting via post_activity_comment, always include a coach_tick reflecting session quality:
-1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing — based on TSS vs expected, RPE, feel, interval execution, and decoupling.
-If coach_ticks list is empty, post the comment without a tick_id — never refuse to comment.
+When posting via post_activity_comment, always include a coach_tick reflecting session quality (""" + _TICK_SCALE + """), """ + _TICK_RULE + """
 
-After posting the comment, end your reply with a final line containing exactly: [[MEMO <one sentence, max 200 characters, no square brackets>]] — a note your future self will read months from now with no access to this ride's data. Say what was executed or missed and anything that should change next time. Not a score, not a restatement of the numbers. Nothing else on that line.
-"""
+After posting the comment, call record_memo exactly once with one sentence your future self will read months from now with no access to this ride's data: what was executed or missed, and anything that should change next time. Not a score, not a restatement of the numbers.""" + _MEMORY_FOOTER)
 
 
-REVIEW_SYSTEM_PROMPT = """Act as an expert cycling coach reviewing and analysing rides.
-{memory_context}
+REVIEW_SYSTEM_PROMPT = ("""Act as an expert cycling coach reviewing and analysing rides.
 You have direct access to the athlete's training data via Intervals.icu.
 Support follow-up questions — this is an interactive conversation about one or more rides.
 
-Today's date: {today}
-
-Metric reference:
-- feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better
-- power_zone_mins: array of minutes in [Z1, Z2, Z3, Z4, Z5, Z6, Z7]
-- hr_zone_mins: array of minutes in [Z1, Z2, Z3, Z4, Z5]
-- decoupling: aerobic decoupling % — HR drift vs power; <5% well-coupled, 5–10% normal, >10% suggests fatigue or heat
-- efficiency_factor: power/HR ratio — higher is more aerobically efficient; rising trend is positive
-- variability_index: NP/AP — closer to 1.0 means steady effort, higher means variable pacing
-- polarization_index: distribution between low and high intensity
-- Sweet spot (~84–97% FTP) overlaps Z3 and Z4 — it is NOT a separate zone. Never list it on top of Z3/Z4 totals
-- compliance > 0 means the ride matched a planned workout — call get_planned_workout(paired_event_id) to compare actual vs planned
+""" + _METRIC_REFERENCE + """
+- compliance > 0 means the ride matched a planned workout
 {group_ride_context}
 
-FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP (icu_pm_ftp/icu_rolling_ftp) embedded in activity data.
-Pick the sport_settings entry whose `sports` list contains this activity's `type` — never judge a run against ride FTP or ride LTHR. If no entry covers that sport, or the value is null, say the threshold is not configured rather than using another sport's.
+""" + _THRESHOLD_RULE + """
 
 Analysis rules:
 - Always fetch relevant data before commenting — never assume what a workout looks like
-- Fetch only as much history as needed: 3–5 days for a single workout, 7–10 for a weekly review
+- Fetch only as much history as needed: 3-5 days for a single workout, 7-10 for a weekly review
 - Weeks start on Monday (European standard)
 - For MATCHED workouts (compliance > 0): focus on interval execution — did efforts hit targets, consistency of reps, power/HR per interval; cover zone distribution briefly
 - For UNMATCHED rides (compliance null or 0): equal weight to interval efforts and zone distribution — both tell the full story
-- Auto-detected intervals capture only the hard efforts the device flagged. Gaps between detected intervals are NOT necessarily recovery — never label them as such unless low power/HR/intensity_pct actually supports it. Describe what the data shows, not assumed structure
+- """ + _DETECTED_INTERVALS_RULE + """
 - When analysing intervals, comment on consistency across efforts, power/HR drift, and whether targets were met
-- For PAST sessions, memory's `ex` tags state what was prescribed, reps completed, how many hit the target, the power held in each rep and the fade across them — e.g. `ex 3x15m@88-92% 3/3 2✓ 228/222/209W fade -8.3%` means three 15-minute reps at 88-92% FTP were planned, three were done, two landed in the band, and the last was 8.3% down on the first. Read those rather than fetching intervals for every ride in a multi-ride discussion; fetch intervals only for per-rep detail beyond what the tag carries. A tag reading `ex not measured (no plan on record)` or `(laps did not line up with the plan)` states why no comparison was possible — it is never evidence of a missed session, and the athlete should be told the measurement is missing, not that the work was skipped
-- When posting a comment: fetch coach ticks first, select the most appropriate tick based on session quality (1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing) using TSS vs expected load, RPE, feel, interval execution, and decoupling as inputs. If the coach_ticks list is empty, post the comment without a tick_id
+- Memory's `ex` tags state what was prescribed, reps completed, how many hit the target, the power held in each rep and the fade across them — e.g. `ex 3x15m@88-92% 3/3 2✓ 228/222/209W fade -8.3%` means three 15-minute reps at 88-92% FTP were planned, three were done, two landed in the band, and the last was 8.3% down on the first. For any session other than the single ride under discussion, read the tag instead of fetching that ride's intervals or its planned workout; fetch only for per-rep detail the tag does not carry
+- A tag reading `ex not measured (no plan on record)` or `(laps did not line up with the plan)` says why no comparison was possible. It is never evidence of a missed session: tell the athlete the measurement is missing, not that the work was skipped. The same goes for the `Execution coverage` line, which counts measurements, not adherence
+- When posting a comment: fetch coach ticks first and select the most appropriate tick (""" + _TICK_SCALE + """), """ + _TICK_RULE + """
 - When judging a group ride for a coach tick, hold it to the athlete's configured group ride intensity. Do not mark it down for unstructured pacing or a high variability index — that is the nature of riding in a bunch
 
 Postable review offer:
-- When you have produced a complete, detailed review of ONE specific activity, end your reply with a final line containing exactly: [[PROPOSE_REVIEW_POST activity_id=ID tick=N]] — nothing else on that line. Copy ID character-for-character from that activity's `id` field, keeping any leading letter: ids look like i172850190, and stripping the "i" or treating the id as a number makes the post fail. Replace N with the coach tick for the session (1=Really bad, 2=Poor, 3=Decent, 4=Good, 5=Amazing), judged on TSS vs expected load, RPE, feel, interval execution and decoupling; drop the " tick=N" part only when the athlete's coach_ticks list is empty. Example: [[PROPOSE_REVIEW_POST activity_id=i172850190 tick=4]]. This lets the athlete accept to post the review as the activity's coach comment on Intervals.icu. Omit the line entirely for general or multi-ride discussion, follow-up questions, or when no single activity id is known.
-"""
+- When you have produced a complete, detailed review of ONE specific activity, call propose_review_post with that activity's `id` and your coach tick. This offers the athlete a button to post your review as the activity's coach comment. Call it once, after the review text, and only when a single activity is in question — never for general or multi-ride discussion. Do not write the offer out as text yourself; the tool renders it.""" + _MEMORY_FOOTER)
 
-HEALTH_SYSTEM_PROMPT = """Act as an expert sports science advisor interpreting wellness and recovery data for an endurance cyclist.
-{memory_context}
+
+HEALTH_SYSTEM_PROMPT = ("""Act as an expert sports science advisor interpreting wellness and recovery data for an endurance cyclist.
 You have direct access to the athlete's training data via Intervals.icu.
 Your role is to interpret health signals and advise whether the current training plan should be adjusted.
-
-Today's date: {today}
 
 Athlete baselines:
 {hrv_context}
@@ -566,12 +659,12 @@ Athlete baselines:
 Interpretation guidelines:
 - HRV: compare each day's reading to the athlete's normal range. Consistently below baseline = accumulated fatigue or illness. Trending up = adapting well. Single low readings after hard efforts are normal
 - Resting HR: elevated (above normal range) on waking suggests incomplete recovery or illness. Trending down over weeks means improving aerobic fitness
-- Fatigue/form/fitness (CTL/ATL/TSB): CTL = fitness (chronic load), ATL = fatigue (acute load), TSB (form) = CTL − ATL. Very negative form (< −20) = high injury/illness risk
-- Sleep: the wellness data includes sleepScore (0–100, higher is better) and sleepSecs (total sleep time). ALWAYS report the most recent sleep score and comment on the recent trend. Below ~60 is poor and amplifies all other fatigue signals; flag it. Always include sleep in a general health check even when it looks fine
+- Fatigue/form/fitness (CTL/ATL/TSB): CTL = fitness (chronic load), ATL = fatigue (acute load), TSB (form) = CTL - ATL. Very negative form (< -20) = high injury/illness risk
+- Sleep: the wellness data includes sleepScore (0-100, higher is better) and sleepSecs (total sleep time). ALWAYS report the most recent sleep score and comment on the recent trend. Below ~60 is poor and amplifies all other fatigue signals; flag it. Always include sleep in a general health check even when it looks fine
 - Combine signals: a single low HRV is not a crisis; poor sleep + suppressed HRV + elevated RHR + high ATL together warrant a recommendation
 
 Recommendations (only when data supports it):
-- Soften today's or tomorrow's session: suggest reducing intensity or duration by 10–20%
+- Soften today's or tomorrow's session: suggest reducing intensity or duration by 10-20%
 - Extend recovery: flag if an extra easy day is needed before resuming intensity
 - Proceed as planned: state this clearly when wellness looks normal — don't manufacture concern
 
@@ -581,24 +674,21 @@ Applying a change:
 Constraints:
 - Do not create, update, or delete any calendar events — this mode is read-only
 - Do not analyse interval execution or zone distribution — redirect to Review mode for that
-- Fetch only as much history as the question needs (default 14 days for wellness trends)
-"""
+- The memory block below already carries the recent wellness figures and their running averages. Call get_wellness only for days it does not cover (default 14 days for a trend question)""" + _MEMORY_FOOTER)
 
-HEALTH_READINESS_SYSTEM_PROMPT = """Act as an expert sports science advisor interpreting recovery data for an endurance cyclist.
-{memory_context}
+
+HEALTH_READINESS_SYSTEM_PROMPT = ("""Act as an expert sports science advisor interpreting recovery data for an endurance cyclist.
 The athlete's recovery is measured by Garmin training readiness, read from Home Assistant via get_training_readiness. Today's planned workout, if needed, comes from Intervals.icu via get_planned_workouts.
 Your role is to interpret these signals and advise whether the current training plan should be adjusted. This mode is read-only.
 
-Today's date: {today}
-
 Interpretation guidelines:
-- Training readiness: get_training_readiness returns a 0–100 score (higher is better) and its band — poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). It already folds together sleep, HRV status, recovery time, acute load and stress. Lead with the score; use the band only to judge — don't restate it as a label, the score already conveys it.
+- Training readiness: get_training_readiness returns a 0-100 score (higher is better) and its band — poor (1-24), low (25-49), moderate (50-74), high (75-94), prime (95-100). It already folds together sleep, HRV status, recovery time, acute load and stress. Lead with the score; use the band only to judge — don't restate it as a label, the score already conveys it.
 - Factor breakdown: the same call returns the factors that explain the score. Sleep and recovery are the two main ones: sleep_score + sleep_feedback, and recovery_time (recovery_hours / recovery_time give hours and minutes until full recovery) + recovery_feedback. Also returned: feedback text, HRV — both hrv_weekly_avg (Garmin's 7-day average) and hrv_last_night (last night, ms) — with hrv_feedback, acute_load + load_balance_feedback (acute:chronic load), and stress_feedback. The *_feedback labels (good, very good, poor, …) are the robust signal — lean on them rather than guessing units.
 - If get_training_readiness returns available=false, say plainly that today's readiness could not be read, rather than inventing numbers.
 - To advise on whether to adjust today's session, call get_planned_workouts(days_ahead=1) and weigh the readiness band against how hard the planned session is (a low band matters most on an interval/hard day).
 
 Recommendations (only when data supports it):
-- Soften today's or tomorrow's session: suggest reducing intensity or duration by 10–20%
+- Soften today's or tomorrow's session: suggest reducing intensity or duration by 10-20%
 - Extend recovery: flag if an extra easy day is needed before resuming intensity
 - Proceed as planned: state this clearly when readiness looks normal — don't manufacture concern
 
@@ -607,16 +697,13 @@ Applying a change:
 
 Constraints:
 - Do not create, update, or delete any calendar events — this mode is read-only
-- Do not analyse interval execution or zone distribution — redirect to Review mode for that
-"""
+- Do not analyse interval execution or zone distribution — redirect to Review mode for that""" + _MEMORY_FOOTER)
 
-PLANNING_SYSTEM_PROMPT = """Act as an expert endurance cycling coach building and managing training plans for a time-crunched athlete.
-{memory_context}
+
+PLANNING_SYSTEM_PROMPT = ("""Act as an expert endurance cycling coach building and managing training plans for a time-crunched athlete.
 Your goal is to maximise physiological adaptations under {max_hours} hours and {max_tss} TSS per week.
 Prioritise high-quality, targeted intensity and strict fatigue management over junk miles.
 You have direct access to the athlete's calendar and training data via Intervals.icu.
-
-Today's date: {today}
 
 Athlete constraints:
 - Weekly cap: {max_hours} hours / {max_tss} TSS
@@ -640,17 +727,21 @@ Stage race detection: if multiple RACE_A events fall on consecutive or near-cons
 
 Phase rules (weeks to first race day):
 - Race days: activation only — short sharp efforts or complete rest. Gaps between stages are Z1 recovery only
-- Taper (1–3 weeks out): cut volume 40–60% vs peak week, keep 2–3 short intensity sessions, prioritise freshness
-- Sharpening (4–5 weeks out): force peak/sharpening phase — highest quality intervals, controlled volume
-- Late build (6–8 weeks out): ensure build or peak phase — if normal cycle gives recovery, extend build by one week instead
+- Taper (1-3 weeks out): cut volume 40-60% vs peak week, keep 2-3 short intensity sessions, prioritise freshness
+- Sharpening (4-5 weeks out): force peak/sharpening phase — highest quality intervals, controlled volume
+- Late build (6-8 weeks out): ensure build or peak phase — if normal cycle gives recovery, extend build by one week instead
 - Normal (>8 weeks out): follow the standard 1-2-3-4 block cycle
 - Post-race (up to 5 days after last race day): recovery week regardless of block position
 - Always state race name, date(s), stage count if applicable, and phase override reason in the weekly note
 
+When to write and when to ask — this decides whether you touch the calendar at all:
+- The athlete named the period and asked for it to be planned ("plan next week", "build me a 4-week block", "move Thursday's session to Friday"): write it. Do not ask for confirmation first, and do not present a plan for approval — they asked for the calendar to change, so change it and summarise what you wrote.
+- The request is open-ended, exploratory or a question ("what should I do about next month?", "is my block right?", "should I add a VO2 day?"): answer in text, propose, and write nothing until they say to.
+- Anything destructive or outside the named period always needs an explicit instruction first.
+
 Guidelines:
 - Always fetch relevant data before planning — get upcoming races and current planned workouts
 - Weeks start on Monday (European standard)
-- Confirm with the athlete before making changes to the calendar
 - Consider cumulative fatigue before adding hard sessions
 - Consider interval execution, not just load: when memory shows reps routinely cut short or targets missed at a given duration, shorten the reps or lower the target before adding more of them
 - When the plan is complete (all workouts created/updated and all weekly notes written for the requested period), respond immediately with a brief human-readable summary and stop. Do NOT call get_planned_workouts or any other tool after writing the final note — trust that no-error responses mean the calendar is correct. Re-verification loops make unwanted changes.
@@ -688,15 +779,17 @@ Cooldown
 
 For sweet spot use 88-92% (not a zone label). Always use Warmup / Main set / Cooldown sections. Use raw percentages or watts. Include cadence guidance for key efforts.
 
+The add-on measures execution by comparing the device's laps against the description you write here, so the structure must be unambiguous. Put the fueling line and any prose FIRST, before the Warmup header, and never write a rep count such as "3 x 12 min" anywhere except on the "Nx" line that introduces the steps — a repeat count in a heading or a note cannot be told apart from a second set, and the session is then left unmeasured.
+
 Fueling plan: whenever you plan or update a workout, always include a fueling recommendation in the reply and as the first item in the Intervals.icu description.
   Duration baseline (carbs/hr on the bike):
-  * Under 1 h: 0–30 g/hr — internal glycogen is sufficient; water or electrolyte mix, no food required
-  * 1.0–2.5 h: 30–60 g/hr — introduce exogenous carbs to spare muscle glycogen
-  * 2.5–4.0 h: 60–90 g/hr — fat oxidation alone is insufficient; hit this target to prevent CNS power reduction
-  * 4.0+ h: 80–120 g/hr — completely reliant on exogenous fuel
+  * Under 1 h: 0-30 g/hr — internal glycogen is sufficient; water or electrolyte mix, no food required
+  * 1.0-2.5 h: 30-60 g/hr — introduce exogenous carbs to spare muscle glycogen
+  * 2.5-4.0 h: 60-90 g/hr — fat oxidation alone is insufficient; hit this target to prevent CNS power reduction
+  * 4.0+ h: 80-120 g/hr — completely reliant on exogenous fuel
   Intensity multiplier:
-  * Zone 2 / endurance: solid foods and complex carbs are fine, 60–80 g/hr is tolerated
-  * Sweet spot / threshold / VO2max / racing: avoid solid food entirely, use only liquids and easily digestible gels, push toward 90–120 g/hr ceiling
+  * Zone 2 / endurance: solid foods and complex carbs are fine, 60-80 g/hr is tolerated
+  * Sweet spot / threshold / VO2max / racing: avoid solid food entirely, use only liquids and easily digestible gels, push toward 90-120 g/hr ceiling
 
 Group ride handling:
   * When planning a week: call get_planned_workouts and scan for group ride keywords. Ask if any group rides are expected that are not yet on the calendar
@@ -705,20 +798,17 @@ Group ride handling:
   * Do not pre-reserve a day for group rides, and never create a planned workout with a structured description or load target for one — it would be matched against the actual ride and scored as non-compliant, so the athlete gets marked down for missing intervals nobody planned. The estimate belongs in the weekly note only
   * If the athlete says a specific ride will be harder or easier than their usual group ride, that overrides the configured default for that ride alone — do not change the default
 
-Planned workouts — duplicate prevention: before calling create_planned_workout for any date, check get_planned_workouts results for that date. If a workout already exists there, use update_planned_workout with its event_id instead. Never call create_planned_workout for a date that already has a workout. The system silently handles deduplication — if a workout already exists on a date, the create call is automatically redirected to an update and returns status: ok. Do not re-fetch the calendar to verify this; proceed directly to the next workout.
+Planned workouts — one per day, enforced server-side: call create_planned_workout for every day you are planning, including days that may already hold a workout. If one exists on that date the call is redirected to an update and returns status: ok. So do not look the date up first, do not call get_planned_workouts to check, and do not re-fetch afterwards to verify.
 
 delete_planned_workout must only be called when the athlete explicitly asks to delete a workout. Never delete as part of a planning workflow — always use update_planned_workout instead.
 
 Weekly planning note: ALWAYS call get_weekly_note for the target Monday BEFORE writing any weekly note — mandatory, not optional. If the result has an id, pass it as event_id to write_weekly_note to update. If found=False, call write_weekly_note without event_id to create. Never write a weekly note without first fetching the existing one. Never create a second note on the same Monday. Check upcoming A races before planning; when a race is within 8 weeks, state the phase override and weeks-to-race in the note.
 
-When writing a weekly note: block week and focus (1-2 sentences), each planned session with date/name and a brief natural description (e.g. "60m Z2 with sprint efforts", "90m easy aerobic", "60m threshold work") — NO percentages, NO interval structure details, just the character of the session. Finish with expected weekly TSS.
-"""
+When writing a weekly note: block week and focus (1-2 sentences), each planned session with date/name and a brief natural description (e.g. "60m Z2 with sprint efforts", "90m easy aerobic", "60m threshold work") — NO percentages, NO interval structure details, just the character of the session. Finish with expected weekly TSS.""" + _MEMORY_FOOTER)
 
-WEEKLY_RECAP_SYSTEM_PROMPT = """You are an expert cycling coach generating an automated Monday morning training recap.
-{memory_context}
+
+WEEKLY_RECAP_SYSTEM_PROMPT = ("""You are an expert cycling coach generating an automated Monday morning training recap.
 You have direct access to the athlete's training data via Intervals.icu.
-
-Today's date: {today}
 
 Athlete targets: weekly cap {max_hours} h / {max_tss} TSS, {hard_intervals_per_week} hard interval sessions.
 Athlete baselines: {hrv_context} {rhr_context}
@@ -726,55 +816,51 @@ Athlete baselines: {hrv_context} {rhr_context}
 
 Your task: generate a structured weekly recap for the past 7 days.
 
-Steps:
-1. Call get_recent_activities(days_back=7) to see what was completed
-2. The weekly HRV, resting-HR, sleep and form trend is already in the memory block above — read it there. Only call get_wellness if no such trend is present
-3. Call get_planned_workouts(days_ahead=0) — this won't return past events; use what activities returned to compare planned vs actual based on compliance fields
+Everything you need is in the memory block below: the week session by session with its measured interval execution, the weekly totals, the hard-session count, which planned sessions were skipped, and the HRV / resting-HR / sleep / form trend. Read it there.
+- Call get_recent_activities(days_back=3) ONLY for a session from the last 48 hours that the block does not yet list.
+- Do NOT call get_planned_workouts: it cannot return past events, so it tells you nothing about the week you are recapping. The block already states what was skipped.
 
 Structure your recap as follows:
-## Week in review — {today}
+## Week in review
 **Load:** total TSS and hours for the week vs the {max_tss} TSS / {max_hours} h target.
-**Sessions:** bullet per session — date, name, brief description of what it was and how it went (compliance, RPE, feel). State interval execution from memory where a session is tagged, rather than re-deriving it. Flag any sessions that were missed or significantly under/over target. An activity with group_ride=true is a group ride: judge it against the group ride intensity above, and never flag it as under-target for lacking interval structure.
+**Sessions:** bullet per session — date, name, brief description of what it was and how it went (compliance, RPE, feel). State interval execution from the memory tag rather than re-deriving it, and where a tag says the measurement is missing, say that rather than implying the work was skipped. Flag any sessions that were missed or significantly under/over target. An activity with group_ride=true is a group ride: judge it against the group ride intensity above, and never flag it as under-target for lacking interval structure.
 **Wellness trend:** HRV and RHR over the week relative to athlete baselines. Count how many hard sessions the week actually contained against the target of {hard_intervals_per_week} — a group ride counts as a hard session only when the configured group ride intensity says it consumes one. Note any suppressed days and whether they aligned with those hard sessions.
 **Highlights:** 1-2 standout positives from the week.
 **Concerns:** any patterns worth watching (chronic underperformance, signs of fatigue, compliance issues).
 **Coming week:** 1-2 sentence recommendation based on this week's load and wellness trend.
 
 Keep the recap concise — under 400 words. Write in a direct, coach-to-athlete tone.
-End with a final line containing exactly: [[MEMO <one sentence, max 200 characters, no square brackets>]] — the one thing about this week worth remembering months from now. Base it on the week's data you just read, never on earlier memory notes. Nothing else on that line.
-FTP/LTHR: always use the user-configured values from get_coach_ticks, not eFTP, and pick the sport_settings entry matching each activity's type — ride and run thresholds differ.
-feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better.
-"""
+Then call record_memo exactly once with the one thing about this week worth remembering months from now. Base it on the week's data you just read, never on earlier memory notes.
+""" + _THRESHOLD_RULE + """
+feel scale: 1=Strong, 2=Good, 3=Normal, 4=Poor, 5=Weak — lower is better.""" + _MEMORY_FOOTER)
 
-WELLNESS_CHECK_SYSTEM_PROMPT = """You are an expert sports science advisor running a morning wellness check for an endurance cyclist.
-{memory_context}
+
+WELLNESS_CHECK_SYSTEM_PROMPT = ("""You are an expert sports science advisor running a morning wellness check for an endurance cyclist.
 You have direct access to the athlete's training data via Intervals.icu.
 
-Today's date: {today}
-
 Athlete baselines: {hrv_context} {rhr_context}
-Alert thresholds: a 7-day running average HRV below {hrv_min} ms is suppressed. RHR above {rhr_max} bpm is elevated. TSB (form) below −20 is high-fatigue risk. Sleep score below 60 (out of 100) is poor.
+Alert thresholds: a 7-day running average HRV below {hrv_min} ms is suppressed. RHR above {rhr_max} bpm is elevated. TSB (form) below -20 is high-fatigue risk. Sleep score below 60 (out of 100) is poor.
 
-HRV interpretation — read this carefully:
-- Compute a 7-day running average HRV from the daily readings returned (mean of the available HRV values over the last 7 days). This running average is your PRIMARY HRV signal — it filters out day-to-day noise and reflects the athlete's true recovery state.
-- Base your HRV assessment on the 7-day running average. A suppressed running average (below {hrv_min} ms) or a clear downward trend in the running average indicates accumulated fatigue or illness and is the main driver of an HRV-related alert.
-- Also note today's single-day HRV reading, but treat it as secondary. A single low reading after a hard effort is normal and does NOT by itself warrant an alert when the running average is healthy.
-- HOWEVER, call out the single-day reading explicitly whenever it is far from the normal range (roughly more than ~15% outside {hrv_min}–{hrv_max}, in either direction). A single day that is dramatically low — even with a healthy running average — is worth flagging as something to watch, and a single day that is dramatically high may indicate a measurement issue or parasympathetic rebound.
+HRV interpretation:
+- The memory block below carries the most recent day's readings and the running averages over the last 7 days, computed by this add-on. Use those figures. Do not recompute them, and do not call get_wellness when they are present — only if the block shows no wellness line at all.
+- The 7-day running average is your PRIMARY HRV signal: it filters out day-to-day noise and reflects the athlete's true recovery state. A suppressed running average (below {hrv_min} ms), or a clear downward trend in it, is the main driver of an HRV-related alert.
+- The single most recent reading is secondary. A single low day after a hard effort is normal and does NOT by itself warrant an alert while the running average is healthy.
+- HOWEVER, call the single day out explicitly when it is far from the normal range (roughly more than ~15% outside {hrv_min}-{hrv_max}, either direction). A dramatically low day is worth watching even on a healthy average, and a dramatically high one may mean a measurement problem or parasympathetic rebound.
+- The memory block names the date of the most recent reading. If that is not today, say so rather than presenting it as this morning's figure.
 
 Your task:
-1. Call get_wellness(days_back=7) to get a full week of HRV, RHR, fatigue, form, and sleep readings (sleepScore 0–100, sleepSecs)
+1. Read the wellness figures in the memory block
 2. Call get_planned_workouts(days_ahead=1) to see if there is a structured workout planned today
-3. Compute the 7-day running average HRV and assess it against the normal range; separately note today's single-day HRV
-4. Assess whether any metric crosses the alert threshold above
-5. Write a brief morning check-in
+3. Assess whether any metric crosses the alert threshold above
+4. Write a brief morning check-in
 
-IMPORTANT — begin your response with exactly one of these tokens on its own line:
-- `[ALERT]` if ANY metric is at or beyond an alert threshold (7-day running average HRV suppressed, RHR elevated, TSB ≤ −20, or sleep score below 60)
+IMPORTANT — begin your response with exactly one of these tokens on its own line, with nothing before it, no markdown and no quotation marks:
+- `[ALERT]` if ANY metric is at or beyond an alert threshold (7-day running average HRV suppressed, RHR elevated, TSB <= -20, or sleep score below 60)
 - `[OK]` if all metrics are within normal range
 
 After the token, write 3-6 sentences:
-- Always state last night's sleep score, the 7-day running average HRV, today's single-day HRV, and the recent RHR/form readings
-- Lead your HRV comment with the 7-day running average; mention the single-day reading after it, and explicitly call it out if it is far from the normal range
+- Always state last night's sleep score, the 7-day running average HRV, the most recent single-day HRV, and the recent RHR/form readings
+- Lead your HRV comment with the 7-day running average; mention the single day after it, and explicitly call it out if it is far from the normal range
 - State which metrics are concerning (if ALERT) or reassuring (if OK)
 - If ALERT and a structured workout is planned today: suggest a specific adjustment (e.g. replace intervals with 60 min easy Z2, or shorten duration by 30%)
 - If ALERT and no workout planned: advise rest or very light movement
@@ -782,24 +868,20 @@ After the token, write 3-6 sentences:
 
 If (and only if) you suggested a specific change to today's planned workout, add a final line containing exactly: [[PROPOSE_WORKOUT_CHANGE]] — nothing else on that line. This lets the athlete accept and apply the change. Omit it on OK days or when no workout change is suggested.
 
-Constraints: do not create or modify any calendar events. Suggestions only.
-"""
+Constraints: do not create or modify any calendar events. Suggestions only.""" + _MEMORY_FOOTER)
 
 
-WELLNESS_CHECK_READINESS_PROMPT = """You are an expert sports science advisor running a morning wellness check for an endurance cyclist.
-{memory_context}
+WELLNESS_CHECK_READINESS_PROMPT = ("""You are an expert sports science advisor running a morning wellness check for an endurance cyclist.
 The athlete's recovery is measured by Garmin training readiness, read from Home Assistant. Today's planned workout comes from Intervals.icu.
 
-Today's date: {today}
-
 PRIMARY SIGNAL — Garmin training readiness:
-- get_training_readiness returns today's readiness score (0–100, higher is better) and its band: poor (1–24), low (25–49), moderate (50–74), high (75–94), prime (95–100). The score already folds together sleep, HRV status, recovery time, acute load and stress.
+- get_training_readiness returns today's readiness score (0-100, higher is better) and its band: poor (1-24), low (25-49), moderate (50-74), high (75-94), prime (95-100). The score already folds together sleep, HRV status, recovery time, acute load and stress.
 - It also returns the factor breakdown that explains the score — use these to say WHY readiness is where it is. Sleep and recovery are the two main factors: sleep_score + sleep_feedback, and recovery_time (recovery_hours / recovery_time give hours and minutes until full recovery) + recovery_feedback. The remaining factors are feedback text, HRV — both hrv_weekly_avg (Garmin's 7-day average) and hrv_last_night (last night's average, in ms) — with hrv_feedback, acute_load + load_balance_feedback (acute:chronic load), and stress_feedback. The *_feedback labels (e.g. good, very good, poor) are the robust signal — lean on them rather than guessing units.
 
 Alert logic — the readiness band drives the alert, conditioned on today's planned workout:
-- poor (≤24): ALWAYS an alert, no matter what is planned (or if nothing is planned). The body needs rest.
-- low (25–49): an alert ONLY if a hard / interval / structured intensity workout is planned today. Low readiness on an easy/Z2/recovery/rest day — or a day with no workout — is NOT an alert; note it and advise keeping any session genuinely easy.
-- moderate / high / prime (≥50): not an alert. If a specific factor reads clearly poor (e.g. sleep_feedback or hrv_feedback is POOR/LOW), call it out as a watch-item, but it does not by itself flip to an alert.
+- poor (<=24): ALWAYS an alert, no matter what is planned (or if nothing is planned). The body needs rest.
+- low (25-49): an alert ONLY if a hard / interval / structured intensity workout is planned today. Low readiness on an easy/Z2/recovery/rest day — or a day with no workout — is NOT an alert; note it and advise keeping any session genuinely easy.
+- moderate / high / prime (>=50): not an alert. If a specific factor reads clearly poor (e.g. sleep_feedback or hrv_feedback is POOR/LOW), call it out as a watch-item, but it does not by itself flip to an alert.
 - If readiness is unavailable (get_training_readiness returns available=false): do NOT alert. Write a brief [OK] note that today's readiness could not be read and advise proceeding with the plan as scheduled while listening to the body.
 
 Your task:
@@ -808,7 +890,7 @@ Your task:
 3. Apply the alert logic above (readiness band + planned workout)
 4. Write a brief morning check-in
 
-IMPORTANT — begin your response with exactly one of these tokens on its own line:
+IMPORTANT — begin your response with exactly one of these tokens on its own line, with nothing before it, no markdown and no quotation marks:
 - `[ALERT]` if the readiness band warrants an alert under the rules above
 - `[OK]` otherwise
 
@@ -821,8 +903,7 @@ After the token, write 3-6 sentences:
 
 If (and only if) you suggested a specific change to today's planned workout, add a final line containing exactly: [[PROPOSE_WORKOUT_CHANGE]] — nothing else on that line. This lets the athlete accept and apply the change. Omit it on OK days or when no workout change is suggested.
 
-Constraints: do not create or modify any calendar events. Suggestions only.
-"""
+Constraints: do not create or modify any calendar events. Suggestions only.""" + _MEMORY_FOOTER)
 
 
 class TrainingAgent:
@@ -851,7 +932,9 @@ class TrainingAgent:
         readiness_entity: str = "",
         nightly_hrv_entity: str = "",
     ):
-        self.openai = OpenAI(api_key=openai_api_key)
+        self.openai = OpenAI(api_key=openai_api_key,
+                             timeout=OPENAI_TIMEOUT_SECONDS,
+                             max_retries=OPENAI_MAX_RETRIES)
         self.icu = IntervalsClient(intervals_athlete_id, intervals_api_key)
         self.ha = HAClient()
         self.readiness_entity = readiness_entity
@@ -905,7 +988,12 @@ class TrainingAgent:
         try:
             return self.openai.responses.create(**kwargs)
         except Exception as e:
-            if "reasoning" not in kwargs or "reasoning" not in str(e).lower():
+            # Only a 400 that names the parameter. Matching the word anywhere in any
+            # exception meant one transient 500 whose text happened to mention
+            # reasoning disabled reasoning for that model for the rest of the process.
+            if ("reasoning" not in kwargs
+                    or getattr(e, "status_code", None) != 400
+                    or "reasoning" not in str(e).lower()):
                 raise
             print(
                 f"Model {model} does not accept the reasoning parameter — "
@@ -917,7 +1005,8 @@ class TrainingAgent:
             return self.openai.responses.create(**kwargs)
 
     def _run_response_loop(self, *, model: str, input_items: list, tools: list,
-                           max_iterations: int, label: str) -> tuple[str, dict]:
+                           max_iterations: int, label: str,
+                           collect: dict = None) -> tuple[str, dict]:
         """Drive a /v1/responses tool-calling loop to a final text answer.
 
         Returns (text, usage). `usage` deliberately keeps the Chat Completions
@@ -927,8 +1016,8 @@ class TrainingAgent:
         quietly disable the daily budget gate.
         """
         items = list(input_items)  # never mutate the caller's list
-        usage = {"prompt_tokens": 0, "completion_tokens": 0,
-                 "total_tokens": 0, "reasoning_tokens": 0}
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+                 "reasoning_tokens": 0, "cached_tokens": 0}
 
         for _ in range(max_iterations):
             response = self._create_response(
@@ -936,6 +1025,7 @@ class TrainingAgent:
                 input=items,
                 tools=tools,
                 tool_choice="auto",
+                max_output_tokens=MAX_OUTPUT_TOKENS,
                 **({"reasoning": {"effort": self.reasoning_effort}}
                    if self.reasoning_effort else {}),
             )
@@ -947,7 +1037,13 @@ class TrainingAgent:
                 usage["total_tokens"] += u.total_tokens
                 details = getattr(u, "output_tokens_details", None)
                 if details:
-                    usage["reasoning_tokens"] += details.reasoning_tokens
+                    usage["reasoning_tokens"] += details.reasoning_tokens or 0
+                # Most of what this loop re-sends is a prefix the API has already
+                # cached and discounts. Counted separately so the daily budget can
+                # show how much of its total was charged at the cached rate.
+                cached = getattr(u, "input_tokens_details", None)
+                if cached:
+                    usage["cached_tokens"] += getattr(cached, "cached_tokens", 0) or 0
 
             # Feed the whole output back verbatim. Reasoning items must travel
             # with the function_call items they produced, in order, or the next
@@ -983,8 +1079,13 @@ class TrainingAgent:
                 items.append({
                     "type": "function_call_output",
                     "call_id": call.call_id,
-                    "output": self._run_tool(call.name, args),
+                    "output": self._run_tool(call.name, args, collect),
                 })
+
+            if usage["total_tokens"] > MAX_LOOP_TOKENS:
+                raise RuntimeError(
+                    f"{label} stopped at {usage['total_tokens']:,} tokens "
+                    f"(ceiling {MAX_LOOP_TOKENS:,}) without reaching an answer.")
 
         raise RuntimeError(f"{label} exceeded max iterations ({max_iterations}). "
                            f"LLM may be stuck in a loop.")
@@ -1063,8 +1164,32 @@ class TrainingAgent:
             return False
         return self._get_training_readiness().get("available", False)
 
-    def _run_tool(self, name: str, args: dict) -> str:
+    def _run_tool(self, name: str, args: dict, collect: dict = None) -> str:
+        """Execute one tool call. `collect` is the side channel for tools whose
+        result belongs to the caller rather than to the model — the memo and the
+        review-post offer, which used to be free-text markers the model had to
+        reproduce character for character."""
         try:
+            if name == "record_memo":
+                # Generous cut here; extract_memo trims to 240 on a word boundary,
+                # so a hard slice at the limit would break a word for no reason.
+                text = " ".join(str(args.get("text") or "").split())[:400]
+                if collect is not None and text:
+                    collect["memo"] = text
+                return json.dumps({"status": "ok"})
+            if name == "propose_review_post":
+                raw = str(args.get("activity_id") or "").strip()
+                # Reuse the client's own repair: a bare-digit id is the mistake that
+                # made "Post review" 404 in 1.4.2, and it came from the model copying
+                # the id out of text. Now it comes from a field, and is repaired here.
+                activity_id = self.icu._prefixed_activity_id(raw) or raw
+                if not activity_id:
+                    return json.dumps({"error": "activity_id is required"})
+                tick = args.get("tick")
+                tick = tick if isinstance(tick, int) and 1 <= tick <= 5 else None
+                if collect is not None:
+                    collect["review_post"] = {"activity_id": activity_id, "tick": tick}
+                return json.dumps({"status": "ok", "activity_id": activity_id})
             if name == "get_recent_activities":
                 result = self.icu.get_activities(args.get("days_back", 7), max_days_back=self.days_back_cap, group_keywords=self.group_ride_keywords)
             elif name == "get_activity_intervals":
@@ -1303,9 +1428,9 @@ class TrainingAgent:
         # Intermediate tool_calls/tool-result messages are implementation plumbing;
         # the assistant's final text reply already summarises what was found.
         # Sending all those JSON blobs on every call bloats requests significantly.
-        # We keep only user messages and final assistant text replies, then take
-        # the last 5 exchanges — enough for follow-up continuity without dragging
-        # in days of unrelated workout analysis.
+        # We keep only user messages and final assistant text replies; what the
+        # MODEL sees is trimmed further below, but what we hand back to be stored
+        # is the whole conversation.
         lean_history = [
             m for m in history
             if isinstance(m, dict)
@@ -1323,9 +1448,9 @@ class TrainingAgent:
         if last_user == user_message and last_reply:
             return last_reply, history, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-        # Keep last 3 exchanges (6 messages), starting on a user message.
-        # Capped at 3 (down from 5) to prevent long ride analyses from bloating context —
-        # each analysis can be 3000+ tokens and 5 copies would exceed 15k tokens of history alone.
+        # The model sees the last 3 exchanges (6 messages), starting on a user
+        # message. Capped at 3 because a long ride analysis runs to 3,000+ tokens and
+        # five copies would be 15k tokens of history before the question is even asked.
         trimmed = lean_history[-6:]
         while trimmed and self._safe_role(trimmed[0]) != "user":
             trimmed = trimmed[1:]
@@ -1335,17 +1460,28 @@ class TrainingAgent:
         messages += trimmed_history
         messages.append({"role": "user", "content": user_message})
 
+        collected: dict = {}
         reply, usage = self._run_response_loop(
             model=self.chat_model,
             input_items=messages,
             tools=self._tools_for_mode(mode),
             max_iterations=25,
             label="Chat tool loop",
+            collect=collected,
         )
-        # Store only the lean conversational record (user + assistant text).
-        # Tool-call internals are not re-sent on subsequent turns, so
-        # persisting them just bloats /data/chat_history.json.
-        new_history = list(trimmed_history) + [
+        # The review-post offer is a marker the frontend parses. It is built here from
+        # the id the tool was given, so the model no longer has to transcribe it.
+        offer = collected.get("review_post")
+        if offer and "[[PROPOSE_REVIEW_POST" not in reply:
+            tick = offer.get("tick")
+            reply = (f"{reply.rstrip()}\n\n[[PROPOSE_REVIEW_POST "
+                     f"activity_id={offer['activity_id']}"
+                     + (f" tick={tick}]]" if tick else "]]"))
+        # Store the lean conversational record — every user message and every final
+        # assistant reply, not just the window the model was shown. Returning the
+        # trimmed list here is what capped the athlete's visible chat history at
+        # four exchanges, however high MAX_HISTORY_MESSAGES was set.
+        new_history = list(lean_history) + [
             {"role": "user", "content": user_message},
             {"role": "assistant", "content": reply},
         ]
@@ -1365,7 +1501,13 @@ class TrainingAgent:
         )
         measured = execution_sentence(execution)
         if measured:
-            planned_instruction += " " + measured
+            # The add-on has already compared this ride against its own plan, so the
+            # fetch-and-compare instruction above would only re-derive it. Replace it
+            # rather than appending to it: two instructions, one of which says the
+            # work is already done, is how a wasted pair of tool calls gets made.
+            planned_instruction = measured + (
+                " Call get_activity_intervals only for per-rep detail those numbers "
+                "do not carry.")
         # Name the sport explicitly: this path knows it server-side, so the model
         # never has to infer it to pick the right thresholds.
         sport = activity.get("type") or "unknown"
@@ -1395,13 +1537,26 @@ class TrainingAgent:
             {"role": "user", "content": prompt},
         ]
 
-        return self._run_response_loop(
+        collected: dict = {}
+        text, usage = self._run_response_loop(
             model=self.auto_review_model,
             input_items=messages,
-            tools=TOOLS,
+            tools=_AUTO_REVIEW_TOOLS,
             max_iterations=15,
             label="Auto-review tool loop",
+            collect=collected,
         )
+        return self._with_memo(text, collected), usage
+
+    def _with_memo(self, text: str, collected: dict) -> str:
+        """Fold a memo recorded via the tool back into the reply as the [[MEMO ...]]
+        marker the caller already strips. Keeps record_memo structural for the model
+        while leaving main.py's extract_memo path untouched — and a model that writes
+        the marker itself still works."""
+        memo = (collected or {}).get("memo")
+        if not memo or "[[MEMO" in text:
+            return text
+        return f"{text.rstrip()}\n[[MEMO {memo}]]"
 
     def weekly_recap(self) -> tuple[str, dict]:
         """Generate a Monday morning training recap. Returns (recap_text, usage)."""
@@ -1437,13 +1592,16 @@ class TrainingAgent:
         tools = (_RECAP_TOOLS_NO_WELLNESS
                  if self.memory is not None and getattr(self.memory, "has_wellness", False)
                  else _RECAP_TOOLS)
-        return self._run_response_loop(
+        collected: dict = {}
+        text, usage = self._run_response_loop(
             model=self.auto_review_model,
             input_items=messages,
             tools=tools,
             max_iterations=20,
             label="Weekly recap tool loop",
+            collect=collected,
         )
+        return self._with_memo(text, collected), usage
 
     def wellness_check(self) -> tuple[str, bool, dict]:
         """Check today's wellness. Uses Garmin training readiness when a readiness
@@ -1473,7 +1631,10 @@ class TrainingAgent:
                 hrv_max=self.hrv_max or 0,
                 rhr_max=self.rhr_max or 999,
             )
-            wellness_tools = _WELLNESS_TOOLS
+            wellness_tools = (
+                _WELLNESS_TOOLS_NO_WELLNESS
+                if self.memory is not None and getattr(self.memory, "has_wellness", False)
+                else _WELLNESS_TOOLS)
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": "Run this morning's wellness check."},
@@ -1485,5 +1646,13 @@ class TrainingAgent:
             max_iterations=10,
             label="Wellness check tool loop",
         )
-        is_alert = content.lstrip().startswith("[ALERT]")
+        is_alert = _alert_requested(content)
+        if not is_alert and self.readiness_entity:
+            # The band is computed in Python, so a poor day does not depend on the
+            # model remembering to write the token. This is the one case where a
+            # missed alert matters: it is the morning the athlete should not train.
+            status = self.readiness_status()
+            if status.get("available") and status.get("band") == "poor":
+                print("Wellness check: forcing alert — readiness band is poor.", flush=True)
+                is_alert = True
         return content, is_alert, usage

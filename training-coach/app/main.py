@@ -155,16 +155,24 @@ def save_token_usage(data: dict):
     _save_json_file(TOKEN_USAGE_FILE, data, "could not save token usage")
 
 
+def _empty_token_usage(today: str) -> dict:
+    """A fresh day's counters. cached_tokens is the share of prompt_tokens the API
+    served from its prompt cache: the budget still counts them, but they are charged
+    at a lower rate, so the figure is reported rather than silently folded in."""
+    return {"date": today, "prompt_tokens": 0, "completion_tokens": 0,
+            "total_tokens": 0, "cached_tokens": 0, "reasoning_tokens": 0}
+
+
 def accumulate_tokens(usage: dict):
     """Add usage dict to today's running total and persist."""
     with token_usage_lock:
         today = datetime.now().strftime("%Y-%m-%d")
         if token_usage.get("date") != today:
             token_usage.clear()
-            token_usage.update({"date": today, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
-        token_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
-        token_usage["completion_tokens"] += usage.get("completion_tokens", 0)
-        token_usage["total_tokens"] += usage.get("total_tokens", 0)
+            token_usage.update(_empty_token_usage(today))
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens",
+                    "cached_tokens", "reasoning_tokens"):
+            token_usage[key] = token_usage.get(key, 0) + usage.get(key, 0)
         save_token_usage(token_usage)
 
 
@@ -987,7 +995,7 @@ def get_tokens():
     with token_usage_lock:
         if token_usage.get("date") != today:
             token_usage.clear()
-            token_usage.update({"date": today, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+            token_usage.update(_empty_token_usage(today))
         return dict(token_usage)
 
 

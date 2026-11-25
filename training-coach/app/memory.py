@@ -32,7 +32,7 @@ MEMORY_SENTINEL = "<<MEMORY>>"
 # fetches that cost far more tokens, and far more wall-clock, than it does. The
 # review cap was the binding one: five session lines each carrying an execution tag
 # AND an auto-review note of up to 240 characters never fitted in 800.
-MAX_CHARS = {"planning": 8000, "review": 4000, "recap": 8000, "wellness": 600}
+MAX_CHARS = {"planning": 8000, "review": 4000, "recap": 8000, "wellness": 1200}
 
 # Execution record schema. Bumping it makes needs_execution re-measure every stored
 # session through the existing drip — the raw interval payloads are not kept, so a
@@ -1385,10 +1385,12 @@ class MemoryStore:
                 return ""
         fitted = self._fit(text, MAX_CHARS.get(scope, 1200),
                            oldest_first=(scope != "review"))
-        if fitted and scope == "planning":
+        if fitted and scope in ("planning", "recap"):
             # The usage rules only pay for themselves where the model would
-            # otherwise re-fetch history. Prepended after _fit so the static
-            # paragraph never eats the data budget.
+            # otherwise re-fetch history — which is both of these. The recap was
+            # left out and then told, in its own prompt, to fetch the week the
+            # block already states. Prepended after _fit so the static paragraph
+            # never eats the data budget.
             return f"{MEMORY_USAGE_INSTRUCTIONS}\n{fitted}"
         return fitted
 
@@ -1569,6 +1571,40 @@ class MemoryStore:
                  in sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))]
         return " · ".join(bits)
 
+    def _wellness_now(self, days: int = 7) -> str:
+        """The most recent day's wellness and the running averages over `days`.
+
+        The morning check used to be handed a week of raw Intervals.icu JSON and
+        told to average the HRV itself — arithmetic a language model is bad at, on
+        numbers this store had already computed. The day is named rather than called
+        "today" so a missing overnight sync is visible instead of silent.
+        """
+        fields = (("hrv", "hrv"), ("restingHR", "rhr"),
+                  ("sleepScore", "sleep"), ("form", "form"))
+        stored = self._data.get("wellness", {})
+        today = date.today()
+        rows = [(d, stored[d]) for d in
+                ((today - timedelta(days=i)).isoformat() for i in range(days))
+                if stored.get(d)]
+        if not rows:
+            return ""
+        latest_day, latest = rows[0]
+        bits = [f"{label} {_fmt(latest[field])}"
+                for field, label in fields if latest.get(field) is not None]
+        line = f"Wellness {latest_day[5:]}: " + " · ".join(bits) if bits else ""
+        averages = []
+        for field, label in fields:
+            values = [row.get(field) for _, row in rows if row.get(field) is not None]
+            mean = _avg(values, 0)
+            if mean is None:
+                continue
+            spread = (f" (range {_fmt(min(values))}–{_fmt(max(values))})"
+                      if field == "hrv" and len(values) > 1 else "")
+            averages.append(f"{label} {_fmt(mean)}{spread}")
+        if averages:
+            line += f" | {len(rows)}-day avg: " + " · ".join(averages)
+        return line
+
     def _wellness_rows(self, mondays):
         """Weekly HRV / resting HR / sleep / form averages from the stored rows."""
         out = []
@@ -1726,6 +1762,9 @@ class MemoryStore:
         hard = sum(1 for s in recent if is_hard_session(s, group_ride_is_hard))
         cap = f" (cap {max_hours} h / {max_tss} TSS)" if max_hours and max_tss else ""
         lines.append(f"7-day: {total_h} h / {total_tss} TSS{cap} · {hard} hard")
+        wellness = self._wellness_now()
+        if wellness:
+            lines.append(wellness)
         return "\n".join(lines)
 
     def _render_recap(self, sessions):
