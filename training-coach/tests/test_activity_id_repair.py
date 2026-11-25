@@ -16,6 +16,7 @@ self-heals a bare-digit id, which also repairs markers already stored in
 Also covers the coach tick now carried through the Accept flow — without it the
 nightly auto-review would overwrite an accepted review.
 """
+import json
 import pathlib
 import re
 import unittest
@@ -159,20 +160,48 @@ class TestProposalMarker(unittest.TestCase):
     def test_shipped_python_strip_regex_matches_this_twin(self):
         self.assertIn(PY_STRIP_SRC, (APP / "main.py").read_text())
 
-    def test_prompt_example_round_trips_through_the_parser(self):
-        """Closes the loop between what the model is told and what we parse."""
-        bullet = next(l for l in REVIEW_SYSTEM_PROMPT.splitlines()
-                      if "PROPOSE_REVIEW_POST" in l)
-        example = re.search(r"\[\[PROPOSE_REVIEW_POST activity_id=i\d+ tick=\d+\]\]", bullet)
-        self.assertIsNotNone(example, "prompt must show a concrete prefixed example")
-        m = MATCH.search(example.group(0))
-        self.assertTrue(m.group(1).startswith("i"))
+    def test_the_server_builds_the_marker_from_the_tool_argument(self):
+        """The marker is no longer the model's to transcribe. It calls
+        propose_review_post and the server writes the marker from the id it was
+        given — so a bare-digit id is repaired before it can 404."""
+        from test_response_loop import FakeResponse, _call, _message, make_agent
+        from agent import TrainingAgent
+
+        agent = make_agent([
+            FakeResponse([_call("c1", "propose_review_post",
+                                json.dumps({"activity_id": "172850190", "tick": 4}))]),
+            FakeResponse([_message("Three reps, all on target.")]),
+        ])
+        # make_agent stubs the dispatcher; this test needs the real one.
+        agent._run_tool = TrainingAgent._run_tool.__get__(agent)
+
+        reply, _history, _usage = agent.chat("how did that one go?", [], mode="review")
+        m = MATCH.search(reply)
+        self.assertIsNotNone(m, f"no marker in reply: {reply!r}")
+        self.assertEqual(m.group(1), "i172850190")
         self.assertIsNotNone(TICK.search(m.group(2)))
 
-    def test_prompt_no_longer_says_numeric_id(self):
-        bullet = next(l for l in REVIEW_SYSTEM_PROMPT.splitlines()
-                      if "PROPOSE_REVIEW_POST" in l)
-        self.assertNotIn("numeric", bullet.lower())
+    def test_an_empty_tick_list_yields_a_marker_without_a_tick(self):
+        from test_response_loop import FakeResponse, _call, _message, make_agent
+        from agent import TrainingAgent
+
+        agent = make_agent([
+            FakeResponse([_call("c1", "propose_review_post",
+                                json.dumps({"activity_id": "i172850190"}))]),
+            FakeResponse([_message("Solid.")]),
+        ])
+        agent._run_tool = TrainingAgent._run_tool.__get__(agent)
+        reply, _history, _usage = agent.chat("and that one?", [], mode="review")
+        m = MATCH.search(reply)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "i172850190")
+        self.assertIsNone(TICK.search(m.group(2)))
+
+    def test_the_prompt_asks_for_the_tool_and_not_the_marker(self):
+        """Two mechanisms for the same offer is how they come to disagree."""
+        self.assertIn("propose_review_post", REVIEW_SYSTEM_PROMPT)
+        self.assertNotIn("[[PROPOSE_REVIEW_POST", REVIEW_SYSTEM_PROMPT)
+        self.assertNotIn("numeric", REVIEW_SYSTEM_PROMPT.lower())
 
 
 if __name__ == "__main__":

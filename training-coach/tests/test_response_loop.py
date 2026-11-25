@@ -83,7 +83,8 @@ def make_agent(scripted, **kw):
         return item
 
     agent.openai = NS(responses=NS(create=fake_create))
-    agent._run_tool = lambda n, a: (agent.tools_run.append((n, a)) or f"RESULT:{n}")
+    agent._run_tool = lambda n, a, collect=None: (
+        agent.tools_run.append((n, a)) or f"RESULT:{n}")
     return agent
 
 
@@ -106,7 +107,19 @@ class TestUsageMapping(unittest.TestCase):
         ])
         _, usage = loop(agent)
         self.assertEqual(usage, {"prompt_tokens": 20, "completion_tokens": 10,
-                                 "total_tokens": 30, "reasoning_tokens": 6})
+                                 "total_tokens": 30, "reasoning_tokens": 6,
+                                 "cached_tokens": 0})
+
+    def test_cached_input_tokens_are_counted_separately(self):
+        """Most of what this loop re-sends is a prefix the API has already cached.
+        Counting it is what lets the daily budget say so."""
+        usage = NS(input_tokens=1000, output_tokens=5, total_tokens=1005,
+                   output_tokens_details=NS(reasoning_tokens=0),
+                   input_tokens_details=NS(cached_tokens=896))
+        agent = make_agent([FakeResponse([_message("done")], usage)])
+        _, got = loop(agent)
+        self.assertEqual(got["cached_tokens"], 896)
+        self.assertEqual(got["prompt_tokens"], 1000)
 
     def test_missing_usage_does_not_crash(self):
         agent = make_agent([FakeResponse([_message("hi")], usage=None)])
@@ -211,11 +224,16 @@ class TestRequestShape(unittest.TestCase):
 
 
 class TestReasoningFallback(unittest.TestCase):
-    def test_model_rejecting_reasoning_is_retried_without_it_and_remembered(self):
-        ok = FakeResponse([_message("ok")])
+    @staticmethod
+    def _rejection(status=400):
         err = Exception("400 - Unsupported parameter: 'reasoning' is not supported "
                         "with this model.")
-        agent = make_agent([err, ok])
+        err.status_code = status
+        return err
+
+    def test_model_rejecting_reasoning_is_retried_without_it_and_remembered(self):
+        ok = FakeResponse([_message("ok")])
+        agent = make_agent([self._rejection(), ok])
         text, _ = loop(agent)
         self.assertEqual(text, "ok")
         self.assertIn("reasoning", agent.seen[0])     # tried optimistically
@@ -231,6 +249,15 @@ class TestReasoningFallback(unittest.TestCase):
             loop(agent)
         self.assertIn("rate limit", str(ctx.exception))
         self.assertEqual(agent._no_reasoning_models, set())
+
+    def test_a_server_error_mentioning_reasoning_does_not_disable_reasoning(self):
+        """It used to: the word anywhere in any exception was enough, and the model
+        was then marked as reasoning-incapable for the life of the process."""
+        agent = make_agent([self._rejection(status=500)])
+        with self.assertRaises(Exception):
+            loop(agent)
+        self.assertEqual(agent._no_reasoning_models, set())
+        self.assertEqual(len(agent.seen), 1)          # no silent retry
 
 
 class TestChatContract(unittest.TestCase):
@@ -304,6 +331,200 @@ class TestToolSchemas(unittest.TestCase):
                   _PLANNING_TOOL_NAMES, _RECAP_TOOL_NAMES,
                   _WELLNESS_READINESS_TOOL_NAMES, _WELLNESS_TOOL_NAMES):
             self.assertLessEqual(s, names, f"unknown tool name(s): {s - names}")
+
+
+class TestChatKeepsTheWholeConversation(unittest.TestCase):
+    """chat() returned the TRIMMED history, and main.py stores what it returns — so
+    every turn threw away everything older than the model's own window and the
+    athlete's visible scrollback could never exceed four exchanges."""
+
+    def _history(self, exchanges):
+        out = []
+        for i in range(exchanges):
+            out.append({"role": "user", "content": f"q{i}"})
+            out.append({"role": "assistant", "content": f"a{i}"})
+        return out
+
+    def test_older_turns_survive_a_new_one(self):
+        agent = make_agent([FakeResponse([_message("fresh")])])
+        history = self._history(10)
+        _reply, new_history, _usage = agent.chat("q10", history, mode="review")
+        self.assertEqual(len(new_history), 22)
+        self.assertEqual(new_history[0]["content"], "q0")
+        self.assertEqual(new_history[-1]["content"], "fresh")
+
+    def test_the_model_still_sees_only_the_recent_window(self):
+        agent = make_agent([FakeResponse([_message("fresh")])])
+        agent.chat("q10", self._history(10), mode="review")
+        sent = [m for m in agent.seen[0]["input"] if m.get("role") != "system"]
+        self.assertEqual(len(sent), 7)                  # 3 exchanges + the question
+        self.assertEqual(sent[0]["content"], "q7")
+
+    def test_a_repeated_question_is_answered_from_the_record(self):
+        """Re-sending because a slow reply looked like a failure must not re-bill."""
+        agent = make_agent([FakeResponse([_message("should not be called")])])
+        history = [{"role": "user", "content": "same"},
+                   {"role": "assistant", "content": "cached answer"}]
+        reply, _history, usage = agent.chat("same", history, mode="review")
+        self.assertEqual(reply, "cached answer")
+        self.assertEqual(usage["total_tokens"], 0)
+        self.assertEqual(agent.seen, [])
+
+
+class TestMemoIsATool(unittest.TestCase):
+    def test_a_recorded_memo_is_folded_back_into_the_reply(self):
+        from agent import TrainingAgent
+        agent = make_agent([
+            FakeResponse([_call("c1", "record_memo",
+                                json.dumps({"text": "Held 3x12 at the top of the band."}))]),
+            FakeResponse([_message("Good session.")]),
+        ])
+        agent._run_tool = TrainingAgent._run_tool.__get__(agent)
+        collected = {}
+        text, _usage = agent._run_response_loop(
+            model="gpt-5.6", input_items=[{"role": "user", "content": "review"}],
+            tools=TOOLS, max_iterations=5, label="t", collect=collected)
+        self.assertEqual(collected["memo"], "Held 3x12 at the top of the band.")
+        self.assertIn("[[MEMO Held 3x12 at the top of the band.]]",
+                      agent._with_memo(text, collected))
+
+    def test_a_marker_the_model_wrote_itself_is_not_duplicated(self):
+        agent = make_agent([FakeResponse([_message("x")])])
+        text = "Good session.\n[[MEMO already written]]"
+        self.assertEqual(agent._with_memo(text, {"memo": "second one"}), text)
+
+
+class TestAutoReviewToolSurface(unittest.TestCase):
+    def test_the_nightly_review_cannot_touch_the_calendar(self):
+        """It used to be handed the full tool list, including delete_planned_workout."""
+        from agent import _AUTO_REVIEW_TOOL_NAMES
+        forbidden = {"create_planned_workout", "update_planned_workout",
+                     "delete_planned_workout", "write_weekly_note"}
+        self.assertEqual(_AUTO_REVIEW_TOOL_NAMES & forbidden, set())
+        self.assertIn("post_activity_comment", _AUTO_REVIEW_TOOL_NAMES)
+        self.assertIn("record_memo", _AUTO_REVIEW_TOOL_NAMES)
+
+    def test_the_recap_cannot_call_a_tool_that_tells_it_nothing(self):
+        """get_planned_workouts cannot return past events, so it could not inform a
+        recap of the week behind it — the prompt said so and asked for it anyway."""
+        self.assertNotIn("get_planned_workouts", _RECAP_TOOL_NAMES)
+
+
+class TestAlertToken(unittest.TestCase):
+    """is_alert was content.lstrip().startswith("[ALERT]"), so one stray character
+    turned a poor-readiness morning into a silent one."""
+
+    def test_the_token_is_found_through_markdown_and_quoting(self):
+        from agent import _alert_requested
+        for body in ("[ALERT]\nHRV is suppressed.",
+                     "**[ALERT]**\nHRV is suppressed.",
+                     '"[ALERT]" — sleep was poor',
+                     "> [ALERT]",
+                     "# [ALERT]",
+                     "\n\n  [ALERT] rest today"):
+            with self.subTest(body=body):
+                self.assertTrue(_alert_requested(body))
+
+    def test_ok_is_not_an_alert(self):
+        from agent import _alert_requested
+        for body in ("[OK]\nAll normal.", "**[OK]** all normal", "", None,
+                     "Readiness is fine today."):
+            with self.subTest(body=body):
+                self.assertFalse(_alert_requested(body))
+
+    def test_the_first_token_wins(self):
+        from agent import _alert_requested
+        self.assertFalse(_alert_requested("[OK]\nNothing to see.\n[ALERT] ignore me"))
+
+
+class TestLoopCeilings(unittest.TestCase):
+    def test_a_token_ceiling_stops_a_loop_an_iteration_count_would_not(self):
+        from agent import MAX_LOOP_TOKENS
+        big = NS(input_tokens=MAX_LOOP_TOKENS + 1, output_tokens=1,
+                 total_tokens=MAX_LOOP_TOKENS + 2,
+                 output_tokens_details=NS(reasoning_tokens=0))
+        agent = make_agent([FakeResponse([_call("c1", "get_coach_ticks", "{}")], big)])
+        with self.assertRaises(RuntimeError) as ctx:
+            loop(agent, max_iterations=50)
+        self.assertIn("ceiling", str(ctx.exception))
+
+    def test_an_output_cap_is_always_sent(self):
+        from agent import MAX_OUTPUT_TOKENS
+        agent = make_agent([FakeResponse([_message("ok")])])
+        loop(agent)
+        self.assertEqual(agent.seen[0]["max_output_tokens"], MAX_OUTPUT_TOKENS)
+
+
+class TestPromptShape(unittest.TestCase):
+    def test_the_volatile_block_is_last_in_every_prompt(self):
+        """Prompt caching matches on a prefix, so the memory block — which changes
+        every sweep — must not sit above the static rules."""
+        import agent as mod
+        names = [n for n in dir(mod) if n.endswith(("_SYSTEM_PROMPT", "_PROMPT"))]
+        self.assertGreaterEqual(len(names), 8)
+        for name in names:
+            text = getattr(mod, name)
+            with self.subTest(prompt=name):
+                self.assertTrue(text.rstrip().endswith("{memory_context}"), name)
+
+    def test_the_metric_reference_exists_once(self):
+        import agent as mod
+        names = [n for n in dir(mod) if n.endswith(("_SYSTEM_PROMPT", "_PROMPT"))]
+        copies = sum(1 for n in names if "polarization_index" in getattr(mod, n))
+        self.assertEqual(copies, 2)   # the two ride-analysis prompts share one source
+        self.assertIn("polarization_index", mod._METRIC_REFERENCE)
+
+
+
+class TestEveryPromptStillFormats(unittest.TestCase):
+    """A missing or renamed format key is a KeyError at request time, on a path with
+    no offline cover otherwise: the prompts are built from fragments now."""
+
+    def _agent(self, **kw):
+        return TrainingAgent(openai_api_key="test", intervals_athlete_id="a1",
+                             intervals_api_key="k1", **kw)
+
+    def test_the_three_chat_modes_build(self):
+        agent = self._agent()
+        for mode in ("review", "health", "planning"):
+            with self.subTest(mode=mode):
+                built = agent._build_system(mode)
+                self.assertNotIn("{", built.replace("{memory_context}", ""))
+                self.assertTrue(built.strip())
+
+    def test_the_readiness_variant_builds(self):
+        agent = self._agent(readiness_entity="sensor.readiness")
+        built = agent._build_system("health")
+        self.assertIn("training readiness", built)
+        self.assertNotIn("{", built)
+
+    def test_the_automated_prompts_build_with_their_own_kwargs(self):
+        """Mirrors weekly_recap() and wellness_check() exactly: same keys, same
+        values, so a drifted key fails here rather than on a Monday morning."""
+        from agent import (WEEKLY_RECAP_SYSTEM_PROMPT, WELLNESS_CHECK_SYSTEM_PROMPT,
+                           WELLNESS_CHECK_READINESS_PROMPT, AUTO_REVIEW_SYSTEM_PROMPT,
+                           group_ride_flag_context, group_ride_intensity_context)
+        agent = self._agent()
+        cases = [
+            (WEEKLY_RECAP_SYSTEM_PROMPT, dict(
+                today="2026-11-25", memory_context="M", max_hours=10, max_tss=700,
+                hrv_context="H", rhr_context="R", hard_intervals_per_week=3,
+                group_ride_context=group_ride_intensity_context("moderate"))),
+            (WELLNESS_CHECK_SYSTEM_PROMPT, dict(
+                today="2026-11-25", memory_context="M", hrv_context="H",
+                rhr_context="R", hrv_min=48, hrv_max=69, rhr_max=54)),
+            (WELLNESS_CHECK_READINESS_PROMPT, dict(
+                today="2026-11-25", memory_context="M")),
+            (AUTO_REVIEW_SYSTEM_PROMPT, dict(
+                today="2026-11-25", memory_context="M",
+                group_ride_context=group_ride_flag_context("moderate"))),
+        ]
+        for template, kwargs in cases:
+            with self.subTest(prompt=template[:40]):
+                built = template.format(**kwargs)
+                self.assertNotIn("{", built)
+                self.assertTrue(built.rstrip().endswith("M"))
+        del agent
 
 
 if __name__ == "__main__":

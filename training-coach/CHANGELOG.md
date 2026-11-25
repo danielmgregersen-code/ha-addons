@@ -1,5 +1,58 @@
 # Changelog
 
+## 1.11.0
+
+A review of everything the add-on sends to OpenAI. Three of these were bugs.
+
+- **Your chat history stopped disappearing.** Every turn, the coach handed back
+  only the last three exchanges and the add-on saved exactly that — so anything
+  older vanished from the conversation, however far you scrolled. The model still
+  sees the recent window; what gets stored is now the whole conversation.
+- **A morning alert can no longer go missing.** Whether the wellness check raised
+  an alert was decided by the reply starting with the exact text `[ALERT]`. A bold
+  marker or a stray quotation mark was enough to turn a poor-readiness morning
+  into a silent one. The token is now recognised through formatting, and when
+  Garmin readiness reads **poor** the alert is raised regardless of what the model
+  wrote — that decision is made in code.
+- **The nightly review can no longer change your calendar.** It was being handed
+  every tool the add-on has, including create, update and delete workout. It now
+  gets only what a review needs: your data, the comment, and the memory note.
+- **The morning check no longer downloads a week of raw wellness data.** It was
+  asked to average your HRV itself from the raw feed — the same waste removed from
+  the Monday recap in 1.8.0, on the one job that runs every day instead of weekly.
+  It now reads the figures this add-on already computed, including the 7-day
+  average and its range, and says which date they are from so a missing overnight
+  sync is visible instead of silent.
+- **The Monday recap stopped fetching what it already had.** It was told to call
+  for the past week's rides and for a calendar lookup that, by its own
+  description, cannot return past events. Both are gone; the week is read from
+  memory, and the one call it may still make is for a session from the last 48
+  hours.
+- **The coach's memo and the "post this review" button are no longer typed out by
+  the model.** Both were text markers it had to reproduce character for
+  character — and getting an activity id wrong that way is what broke Post review
+  in 1.4.2. They are proper actions now, and the id is repaired in code.
+- Planning said both "confirm before making changes" and "write every workout in
+  one pass". It now says plainly: when you name the period and ask for it to be
+  planned, it writes; when you ask an open question, it answers and writes
+  nothing. The duplicate-check paragraph that contradicted itself is gone too —
+  the add-on has enforced one workout per day server-side all along.
+- Planning is now told not to repeat a rep count such as "3 x 12 min" outside the
+  interval list, because that is exactly what made some of your sessions
+  unmeasurable before 1.10.0.
+- A transient server error whose text happened to mention reasoning used to
+  disable reasoning for the rest of the day, silently. Only a real rejection does
+  that now.
+- The static half of each prompt is now stable and the changing half sits at the
+  end, so OpenAI's prompt cache can be reused across a request instead of being
+  invalidated by the memory block.
+- Requests now have an explicit timeout and a cap on reply length, and a tool loop
+  that will not converge stops on total tokens rather than on a step count.
+- The token counter now also reports how much of the day's total OpenAI served
+  from its cache, which is charged at a lower rate.
+- One shared copy of the metric reference, the threshold rule and the
+  interval-detection caveat. Seven copies had already drifted apart.
+
 ## 1.10.0
 
 - **Session reviews were only ever detailed for the last two weeks, and this fixes

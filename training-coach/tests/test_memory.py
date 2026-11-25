@@ -590,3 +590,51 @@ class TestReviewCarriesStructuredHistory(unittest.TestCase):
         self.assertLessEqual(len(got), MAX_CHARS["review"], f"review {len(got)}")
         self.assertNotIn("trimmed to fit", got)
 
+
+class TestWellnessReachesTheMorningCheck(unittest.TestCase):
+    """The morning check was handed a week of raw Intervals.icu JSON and told to
+    average the HRV itself — on numbers this store had already computed."""
+
+    def _store(self):
+        s = store()
+        today = date.today()
+        for i in range(7):
+            day = (today - timedelta(days=i)).isoformat()
+            s.record_wellness([{"id": day, "hrv": 60 - i, "restingHR": 47 + i,
+                                "sleepScore": 80 - i, "ctl": 70, "atl": 78}])
+        s.upsert_session(activity("i1", today.isoformat()))
+        return s
+
+    def test_the_wellness_scope_states_today_and_the_running_average(self):
+        got = self._store().render("wellness", max_hours=10, max_tss=700)
+        self.assertIn("hrv 60", got)                 # the most recent day
+        self.assertIn("7-day avg", got)
+        self.assertIn("hrv 57", got)                 # mean of 60..54
+        self.assertIn("range 54–60", got)
+        self.assertIn("form -8", got)                # ctl - atl, computed on store
+
+    def test_the_day_is_named_so_a_missing_sync_is_visible(self):
+        s = store()
+        stale = (date.today() - timedelta(days=3)).isoformat()
+        s.record_wellness([{"id": stale, "hrv": 55, "restingHR": 48}])
+        s.upsert_session(activity("i1", date.today().isoformat()))
+        got = s.render("wellness", max_hours=10, max_tss=700)
+        self.assertIn(f"Wellness {stale[5:]}:", got)
+
+    def test_no_stored_wellness_renders_no_line(self):
+        s = store()
+        s.upsert_session(activity("i1", date.today().isoformat()))
+        self.assertNotIn("Wellness", s.render("wellness", max_hours=10, max_tss=700))
+
+    def test_the_recap_now_carries_the_usage_rules_too(self):
+        """It was the one scope told, in its own prompt, to fetch what the block
+        already states — and the only one of the two without the rules."""
+        s = self._store()
+        self.assertIn("How to use TRAINING MEMORY", s.render("recap"))
+        self.assertIn("How to use TRAINING MEMORY",
+                      s.render("planning", max_hours=10, max_tss=700))
+        self.assertNotIn("How to use TRAINING MEMORY", s.render("review"))
+
+
+if __name__ == "__main__":
+    unittest.main()
