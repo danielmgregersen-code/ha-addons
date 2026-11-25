@@ -34,6 +34,13 @@ WEEKLY_RECAP_STATE_FILE = f"{STORAGE_DIR}/weekly_recap_state.json"
 WELLNESS_STATE_FILE = f"{STORAGE_DIR}/wellness_state.json"
 AUTOMATION_POLL_SECONDS = 600  # 10-minute check interval for scheduled automations
 MEMORY_SWEEP_STATE_FILE = f"{STORAGE_DIR}/memory_sweep_state.json"
+WELLNESS_FETCH_STATE_FILE = f"{STORAGE_DIR}/wellness_fetch_state.json"
+# Last night's sleep and HRV are published hours after midnight, so one fetch a day
+# taken at 00:02 stored nothing and left the morning check reading yesterday. Top up
+# hourly until today's row has landed, and stop looking after midday: by then it has
+# either arrived or it is not coming.
+WELLNESS_TOPUP_INTERVAL_SECONDS = 3600
+WELLNESS_TOPUP_UNTIL_HOUR = 12
 MEMORY_BACKFILL_DAYS = 180   # one HTTP request, parsed in Python, never entering a prompt
 # Events must reach as far back as activities, or the older half of the backfill
 # has no plans to compare against.
@@ -376,6 +383,10 @@ async def wellness_check_loop():
                     print(f"Wellness check deferred for {today}: {status.get('reason')}", flush=True)
                     continue
             print(f"Running wellness check for {today}", flush=True)
+            # The check reads the stored wellness rather than fetching its own, so
+            # make the store current first. One request, immediately before it
+            # matters, whatever the hourly top-up has managed so far.
+            await asyncio.to_thread(_refresh_wellness, True)
             message, is_alert, usage = agent.wellness_check()
             accumulate_tokens(usage)
             label = f"[Wellness check] {today}"
@@ -484,6 +495,42 @@ def _drain_execution_queue() -> None:
             _execution_for({**session, "id": aid})
 
 
+def _refresh_wellness(force: bool = False) -> bool:
+    """Keep the stored wellness current. Returns True if a fetch happened.
+
+    The fetch used to live inside the once-a-day sweep, whose gate the first poll
+    after midnight consumed — before the overnight data exists. The store was
+    therefore permanently a day behind, which mattered more once the morning check
+    started reading it instead of fetching for itself.
+
+    One request, no tokens. It stops as soon as today's row carries HRV or a sleep
+    score, so the steady state is one or two fetches a morning.
+    """
+    today = date.today().isoformat()
+    try:
+        if not force:
+            if memory_store.wellness_complete(today):
+                return False
+            if datetime.now().hour >= WELLNESS_TOPUP_UNTIL_HOUR:
+                return False
+            last = _load_json_file(WELLNESS_FETCH_STATE_FILE, {}).get("at")
+            if last:
+                try:
+                    waited = (datetime.now() - datetime.fromisoformat(last)).total_seconds()
+                except ValueError:
+                    waited = WELLNESS_TOPUP_INTERVAL_SECONDS
+                if waited < WELLNESS_TOPUP_INTERVAL_SECONDS:
+                    return False
+        memory_store.record_wellness(agent.icu.get_wellness(days_back=7))
+        _save_json_file(WELLNESS_FETCH_STATE_FILE,
+                        {"at": datetime.now().isoformat(timespec="seconds"), "date": today},
+                        "could not save wellness fetch state")
+        return True
+    except Exception as e:
+        print(f"Wellness refresh error: {e}", flush=True)
+        return False
+
+
 def _memory_sweep(activities):
     """Backfill once, then judge past planned workouts and reconcile deletions.
 
@@ -538,9 +585,9 @@ def _memory_sweep(activities):
         # uploaded today needs its plan available now, not in two days.
         memory_store.record_plans(past)
         memory_store.record_planned(judge_planned(past, sessions, date.today()))
-        # One request a day, parsed here and never handed to the model. The raw
-        # payload measured ~4,100 characters for a single week, re-sent on every
-        # loop iteration of the Monday recap.
+        # Once a day over three weeks, as the backstop for a late correction
+        # upstream. _refresh_wellness handles today's row, which is the one that
+        # arrives hours after this sweep first runs.
         memory_store.record_wellness(agent.icu.get_wellness(days_back=21))
         if activities:
             since = min((a.get("date") or "9999") for a in activities)
@@ -659,6 +706,7 @@ async def auto_review_loop():
             # Must run after the ride loop: the fetch above is what populates the
             # window the sweep cross-references.
             _memory_sweep(new_activities)
+            _refresh_wellness()
             _drain_execution_queue()
         except Exception as e:
             print(f"Auto-review error: {e}", flush=True)

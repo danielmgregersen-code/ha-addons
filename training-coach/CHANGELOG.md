@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.11.1
+
+- **Your stored wellness is now actually current.** It was fetched once a day, and
+  the first poll after midnight took that slot — hours before last night's sleep
+  and HRV are published, so the row stored was empty and nothing tried again until
+  the next midnight. The store was permanently a day behind. That went unnoticed
+  while the morning check fetched its own data; 1.11.0 moved it to reading the
+  store, so on a stale store it would read yesterday's HRV. It now tops the day up
+  hourly through the morning until the overnight data has landed, stops as soon as
+  it has, and the morning check refreshes it immediately before reading. One
+  request each, no tokens.
+- **The coach no longer believes the last two days are missing.** Every planning
+  and recap prompt ended with a note that the last 48 hours might be incomplete,
+  which invited it to re-download rides it already had — they reach the store within
+  a couple of minutes of uploading. The note now states what is genuinely pending:
+  sessions skipped in the last two days are not yet judged, because an upload can
+  land late and calling a session skipped before it arrives would be wrong.
+
 ## 1.11.0
 
 A review of everything the add-on sends to OpenAI. Three of these were bugs.
