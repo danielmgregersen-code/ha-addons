@@ -32,12 +32,18 @@ MEMORY_SENTINEL = "<<MEMORY>>"
 # fetches that cost far more tokens, and far more wall-clock, than it does. The
 # review cap was the binding one: five session lines each carrying an execution tag
 # AND an auto-review note of up to 240 characters never fitted in 800.
-MAX_CHARS = {"planning": 8000, "review": 2500, "recap": 8000, "wellness": 600}
+MAX_CHARS = {"planning": 8000, "review": 4000, "recap": 8000, "wellness": 600}
 
 # Execution record schema. Bumping it makes needs_execution re-measure every stored
 # session through the existing drip — the raw interval payloads are not kept, so a
 # richer record can only be rebuilt by fetching again.
 EXEC_VERSION = 3
+# Structured sessions the review scope carries beyond the five most recent rides.
+# Review is the scope the athlete discusses rides in, and it used to hold the five
+# newest sessions of ANY kind — four easy spins and a walk, for an athlete who rides
+# six times a week. A conversation about a VO2 session then had to fetch its own
+# history live, which is the round trip this whole store exists to avoid.
+REVIEW_STRUCTURED = 10
 # Beyond this many reps the per-rep list is summarised: a 10x1min VO2 session would
 # otherwise crowd a week of other sessions out of the block when _fit starts trimming.
 MAX_RENDERED_REPS = 6
@@ -819,6 +825,20 @@ def _exec_bits(record) -> list:
     return bits
 
 
+def _structured(session, group_ride_is_hard: bool) -> bool:
+    """Whether this session wanted its intervals measured.
+
+    Two limbs, and the first is the load-bearing one: a record carrying reps_planned
+    proves a plan really was compared against the ride, which catches a deload touch
+    session that is nowhere near hard enough for is_hard_session to claim it.
+    """
+    if session.get("group_ride"):
+        return False
+    if (session.get("exec") or {}).get("reps_planned") is not None:
+        return True
+    return is_hard_session(session, group_ride_is_hard)
+
+
 def _exec_tag(record, structured: bool = False) -> str:
     """Execution tag for a session line, or "" when there is nothing honest to say.
 
@@ -1527,7 +1547,7 @@ class MemoryStore:
         """
         measured, reasons = 0, {}
         for session in sessions:
-            if session.get("group_ride"):
+            if not _structured(session, group_ride_is_hard):
                 continue
             record = session.get("exec") or {}
             if record.get("basis") == "plan":
@@ -1537,8 +1557,6 @@ class MemoryStore:
                 continue
             label = _EXEC_REASON_TEXT.get(record.get("reason"))
             if record.get("reps_planned") is None:
-                if not is_hard_session(session, group_ride_is_hard):
-                    continue
                 label = label or "not measured yet"
             if not label:
                 continue
@@ -1655,13 +1673,34 @@ class MemoryStore:
             if fades:
                 norm += f", fade {_fmt(_avg(fades))}%"
             lines[-1] += norm
-        for s in sessions[-5:][::-1]:
+        newest = sessions[-5:][::-1]
+        for s in newest:
             lines.append(f"  {s.get('date', '')[5:]} {s.get('name') or s.get('type') or 'session'} "
                          f"{_fmt(s.get('duration_min'), 'm')}/{_fmt(s.get('tss'))} "
                          f"rpe{_fmt(s.get('rpe'))} feel{_fmt(s.get('feel'))}"
                          + _exec_tag(s.get("exec"),
-                                     structured=is_hard_session(s, group_ride_is_hard))
+                                     structured=_structured(s, group_ride_is_hard))
                          + (f" — {s['note']}" if s.get("note") else ""))
+
+        # The comparable sessions. Without these, discussing one VO2 session against
+        # the last few meant fetching them from Intervals.icu one at a time. No notes
+        # here — the tag is the point, and a note runs to 240 characters.
+        shown = {s.get("id") for s in newest}
+        history = [s for s in reversed(sessions)
+                   if s.get("id") not in shown and _structured(s, group_ride_is_hard)]
+        history = history[:REVIEW_STRUCTURED]
+        if history:
+            lines.append(f"\nYour last {len(history)} structured sessions before those:")
+            for s in history:
+                lines.append(
+                    f"  {s.get('date', '')[5:]} "
+                    f"{(s.get('name') or s.get('type') or 'session')[:22]:22} "
+                    f"{_fmt(s.get('duration_min'), 'm')}/{_fmt(s.get('tss'))} "
+                    f"rpe{_fmt(s.get('rpe'))} feel{_fmt(s.get('feel'))}"
+                    + _exec_tag(s.get("exec"), structured=True))
+        coverage = self._execution_coverage(newest + history, group_ride_is_hard)
+        if coverage:
+            lines.append(coverage)
         return "\n".join(lines)
 
     def _render_wellness(self, sessions, group_ride_is_hard, max_hours, max_tss):

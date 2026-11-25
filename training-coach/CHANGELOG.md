@@ -36,6 +36,13 @@
   oldest sessions and says so, instead of discarding the newest ones and the trends.
 - Your HRV, resting heart rate and sleep trend was also missing from the Monday recap
   for the same reason as the plans. It is recorded now.
+- **Review mode now sees the sessions worth comparing against.** It held your five
+  most recent rides of any kind — for six rides a week that is four easy spins and a
+  walk — so a conversation about a VO2 session had to fetch its own history from
+  Intervals.icu one ride at a time. It now also carries your last ten structured
+  sessions with their execution tags, and states its own coverage. The nightly
+  auto-review reads the same block, so it can put a session in context instead of
+  judging it alone.
 - `/debug/storage` reports how many sessions were measured and why the rest were not.
 
 ## 1.9.0

@@ -13,6 +13,7 @@ from datetime import date, timedelta
 
 from memory import (
     MAX_CHARS,
+    REVIEW_STRUCTURED,
     MEMORY_USAGE_INSTRUCTIONS,
     MemoryStore,
     extract_memo,
@@ -501,4 +502,91 @@ class TestExecutionCoverage(unittest.TestCase):
             with self.subTest(scope=scope):
                 self.assertIn("Execution coverage:",
                               s.render(scope, max_hours=8, max_tss=500))
+
+
+class TestReviewCarriesStructuredHistory(unittest.TestCase):
+    """Review is the scope rides are discussed in, and it held the five newest
+    sessions of ANY kind. For six rides a week that is four easy spins and a walk, so
+    a conversation about a VO2 session had to fetch its own history live."""
+
+    EXEC = {"basis": "plan", "plan_text": "5x4m@110-118%", "reps_done": 5,
+            "reps_planned": 5, "target_hit": 5, "reps": [330, 324, 318, 312, 306],
+            "rep_unit": "W", "fade_pct": -7.3}
+
+    def _store(self):
+        s = store()
+        day = date(2026, 9, 20)
+        # Twelve structured sessions, oldest first.
+        for i in range(12):
+            aid = f"hard{i}"
+            s.upsert_session(activity(aid, (day + timedelta(days=i * 3)).isoformat(),
+                                      name=f"Peak VO2 {i} — 5 x 4m", intensity=0.9))
+            s.set_execution(aid, dict(self.EXEC))
+        # Then five easy rides, a walk and a strength session on top.
+        after = day + timedelta(days=40)
+        for i in range(5):
+            aid = f"easy{i}"
+            s.upsert_session(activity(aid, (after + timedelta(days=i)).isoformat(),
+                                      name="Brønderslev Cykling", intensity=0.6, tss=34,
+                                      power_zone_mins=[40, 20, 0, 0, 0, 0, 0]))
+            s.set_execution(aid, {"basis": "actual_only", "reason": "unstructured"})
+        s.upsert_session(activity("walk", (after + timedelta(days=5)).isoformat(),
+                                  type="Walk", name="Brønderslev Gang", intensity=0.3,
+                                  tss=8, power_zone_mins=[30, 0, 0, 0, 0, 0, 0]))
+        return s
+
+    def test_the_structured_sessions_are_there_with_their_tags(self):
+        got = self._store().render("review")
+        self.assertIn("structured sessions before those", got)
+        self.assertIn("5x4m@110-118% 5/5 5✓", got)
+
+    def test_it_carries_the_configured_number_of_them(self):
+        got = self._store().render("review")
+        self.assertEqual(got.count("Peak VO2"), REVIEW_STRUCTURED)
+
+    def test_a_session_in_both_lists_is_rendered_once(self):
+        """The newest five and the structured history overlap whenever a recent ride
+        was structured. Rendered twice is worse than rendered once badly."""
+        s = store()
+        for i in range(3):
+            aid = f"hard{i}"
+            s.upsert_session(activity(aid, (date(2026, 11, 1) + timedelta(days=i)).isoformat(),
+                                      name=f"Threshold {i}", intensity=0.9))
+            s.set_execution(aid, dict(self.EXEC))
+        got = s.render("review")
+        for i in range(3):
+            self.assertEqual(got.count(f"Threshold {i}"), 1, f"Threshold {i}")
+
+    def test_easy_rides_walks_and_strength_stay_out_of_it(self):
+        got = self._store().render("review")
+        history = got.split("structured sessions before those:")[1]
+        self.assertNotIn("Gang", history)
+        self.assertNotIn("Brønderslev Cykling", history)
+
+    def test_the_history_lines_carry_no_auto_review_notes(self):
+        """A note runs to 240 characters and the tag is the point of these lines."""
+        s = self._store()
+        for i in range(12):
+            s.set_note(f"hard{i}", "A note that would swamp the block if it were rendered here.")
+        history = s.render("review").split("structured sessions before those:")[1]
+        self.assertNotIn("would swamp", history)
+
+    def test_review_states_its_coverage(self):
+        s = self._store()
+        s.set_execution("hard3", {"basis": "actual_only", "reason": "plan_not_recorded"})
+        got = s.render("review")
+        self.assertIn("Execution coverage:", got)
+        self.assertIn("no plan on record", got)
+
+    def test_the_worst_case_stays_within_budget(self):
+        """Five maximum-length notes, every session tagged, ten structured entries."""
+        s = self._store()
+        note = ("Held the band through all five, the last one a touch down and the legs went at "
+                "the very end; fuelling was on plan and the recoveries were long enough.")[:240]
+        for i in range(5):
+            s.set_note(f"easy{i}", note)
+        s.set_note("walk", note)
+        got = s.render("review")
+        self.assertLessEqual(len(got), MAX_CHARS["review"], f"review {len(got)}")
+        self.assertNotIn("trimmed to fit", got)
 
