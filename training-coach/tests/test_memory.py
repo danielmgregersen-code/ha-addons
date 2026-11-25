@@ -7,6 +7,7 @@ are missing — which is the normal state of a fresh container.
 """
 import json
 import os
+import pathlib
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -361,10 +362,6 @@ class TestBackfill(unittest.TestCase):
         self.assertEqual(s._data["sessions"]["i1"]["note"], "Kept.")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestWellnessStore(unittest.TestCase):
     """Field names come from the live Intervals.icu spec (components.schemas.Wellness),
     not from guesswork: the repo only ever evidenced sleepScore and sleepSecs, and a
@@ -634,6 +631,75 @@ class TestWellnessReachesTheMorningCheck(unittest.TestCase):
         self.assertIn("How to use TRAINING MEMORY",
                       s.render("planning", max_hours=10, max_tss=700))
         self.assertNotIn("How to use TRAINING MEMORY", s.render("review"))
+
+
+class TestWellnessFreshness(unittest.TestCase):
+    """The store was permanently a day behind on wellness: the single fetch a day was
+    taken by the first poll after midnight, hours before sleep and HRV are published,
+    and nothing tried again until the next midnight."""
+
+    def test_a_midnight_row_does_not_count_as_landed(self):
+        s = store()
+        today = date.today().isoformat()
+        self.assertFalse(s.wellness_complete(today))
+        s.record_wellness([{"id": today, "ctl": 70, "atl": 78}])
+        self.assertFalse(s.wellness_complete(today), "no HRV and no sleep score yet")
+        s.record_wellness([{"id": today, "ctl": 70, "atl": 78, "hrv": 58}])
+        self.assertTrue(s.wellness_complete(today))
+
+    def test_a_sleep_score_alone_is_enough(self):
+        s = store()
+        today = date.today().isoformat()
+        s.record_wellness([{"id": today, "sleepScore": 78}])
+        self.assertTrue(s.wellness_complete(today))
+
+    def test_another_day_is_not_consulted(self):
+        s = store()
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        s.record_wellness([{"id": yesterday, "hrv": 58, "sleepScore": 80}])
+        self.assertFalse(s.wellness_complete(date.today().isoformat()))
+
+
+class TestFreshnessClaims(unittest.TestCase):
+    """The block claimed a blanket 48-hour gap. Sessions land within minutes of
+    uploading, so the only thing that genuinely lags is the two-day grace on skip
+    detection — and the claim stood as an invitation to re-fetch a fortnight the
+    block already held."""
+
+    def _store(self):
+        s = store()
+        for i in range(10):
+            day = (date.today() - timedelta(days=i * 2)).isoformat()
+            s.upsert_session(activity(f"i{i}", day))
+        return s
+
+    def test_no_scope_claims_a_48_hour_gap(self):
+        s = self._store()
+        for scope in ("planning", "recap", "wellness", "review"):
+            text = s.render(scope, max_hours=10, max_tss=700)
+            with self.subTest(scope=scope):
+                self.assertNotIn("48 h", text)
+                self.assertNotIn("48 hours", text)
+
+    def test_the_two_day_grace_is_stated_where_it_applies(self):
+        got = self._store().render("planning", max_hours=10, max_tss=700)
+        self.assertIn("skipped in the last 2 days are not yet judged", got)
+
+    def test_the_morning_check_refreshes_before_it_reads(self):
+        """main.py cannot be imported offline (no fastapi here), so this pins the
+        call site instead: the check reads the store now, so a stale store is a
+        stale answer."""
+        src = (pathlib.Path(__file__).resolve().parents[1] / "app" / "main.py").read_text()
+        check = src[src.index("Running wellness check for"):]
+        self.assertIn("_refresh_wellness, True", check[:700])
+        self.assertLess(check.index("_refresh_wellness"),
+                        check.index("agent.wellness_check()"))
+
+    def test_the_wellness_fetch_is_not_only_inside_the_daily_gate(self):
+        src = (pathlib.Path(__file__).resolve().parents[1] / "app" / "main.py").read_text()
+        self.assertIn("def _refresh_wellness", src)
+        loop_body = src[src.index("_memory_sweep(new_activities)"):]
+        self.assertIn("_refresh_wellness()", loop_body[:200])
 
 
 if __name__ == "__main__":

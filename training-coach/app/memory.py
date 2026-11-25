@@ -76,8 +76,9 @@ get_recent_activities to re-derive history it already states. Its coverage windo
 block; the absence of a session before coverage_from means "not recorded", never "did not train".
 Still fetch live, every time — memory never holds these: today's readiness or wellness, the upcoming
 calendar and races, the athlete's thresholds and coach ticks, the existing weekly note before writing
-one, and any session from the last 48 hours whose detail matters (use get_recent_activities(days_back=3),
-not more). When memory and a live fetch disagree, the live fetch wins and memory is wrong. Never add an
+one. Completed sessions reach this block within a couple of minutes of uploading, so do NOT re-fetch
+recent days to look for one — if a ride you know about is genuinely absent, then fetch it with
+get_recent_activities(days_back=3). When memory and a live fetch disagree, the live fetch wins. Never add an
 estimated TSS for a ride memory already reports as completed, and do not quote the block back to the
 athlete as if it were fresh analysis.
 Lines headed "Interval execution" and session tags like "ex 3x15m@88-92% 3/3 2✓ 228/222/209W fade -8.3%"
@@ -1175,6 +1176,17 @@ class MemoryStore:
                 self._save()
         return changed
 
+    def wellness_complete(self, day: str) -> bool:
+        """Whether the overnight data for `day` has landed.
+
+        Sleep and HRV are published hours after midnight, so a row fetched at 00:02
+        carries neither. This is what tells the refresh whether there is anything
+        left to wait for.
+        """
+        with self._lock:
+            row = (self._data.get("wellness") or {}).get(day) or {}
+        return row.get("hrv") is not None or row.get("sleepScore") is not None
+
     @property
     def has_wellness(self) -> bool:
         with self._lock:
@@ -1645,8 +1657,12 @@ class MemoryStore:
         execution = self._execution_summary(in_window, len(mondays))
         if execution:
             lines.append(execution)
-        lines.append("The last 48 h may be incomplete — call get_recent_activities(days_back=3) "
-                     "if today's load matters.")
+        # What is actually stale, rather than a blanket 48 hours: sessions land here
+        # within minutes, so the old caveat was an invitation to re-fetch a fortnight
+        # that was already complete.
+        lines.append("Completed sessions are current to within minutes. Sessions skipped in the "
+                     "last 2 days are not yet judged — an upload can land late, and calling a "
+                     "session skipped before it arrives would be wrong.")
         return "\n".join(lines)
 
     def _execution_summary(self, sessions, weeks):
@@ -1743,7 +1759,8 @@ class MemoryStore:
         today = date.today()
         window = {(today - timedelta(days=i)).isoformat() for i in range(7)}
         recent = [s for s in sessions if s.get("date") in window]
-        lines = [self._header(" Last 48 h may be incomplete.")]
+        lines = [self._header(" Rides land here within minutes; the wellness line "
+                              "carries the date it is from.")]
         by_day = {}
         for s in recent:
             by_day.setdefault(s["date"], []).append(s)
