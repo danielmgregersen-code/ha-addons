@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.11.2
+
+- **Fixed "model returned no text" when asking for an in-depth review.** 1.11.0
+  turned the "post this review" offer into a proper action instead of a line of
+  text the coach had to type. It then wrote the review and offered the post in the
+  same breath — and the add-on, which only looked for text in replies that carried
+  no action, threw the review away and asked for more. There was nothing more to
+  say, so you got an error instead of your review.
+- **The nightly review was losing its note the same way.** The comment and the
+  rating reached Intervals.icu, then the add-on failed before saving the one-line
+  note to memory, and the ride counted as reviewed so it was never retried. Rides
+  rated since 1.11.0 are missing their note in the training memory — the comment on
+  Intervals.icu is intact, and the measured interval execution was never affected.
+- **The Monday recap would have hit it too**, and retried every ten minutes for the
+  rest of the day. 1.11.0 landed on a Wednesday, so that had not happened yet.
+- An answer that arrives together with an action now also saves a round trip rather
+  than costing one: the add-on no longer asks the model to confirm what it has
+  already said.
+
 ## 1.11.1
 
 - **Your stored wellness is now actually current.** It was fetched once a day, and
