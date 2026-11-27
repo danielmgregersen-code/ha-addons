@@ -588,6 +588,11 @@ MAX_OUTPUT_TOKENS = 16_000
 # instead of on the model. One retry, so the worst case stays bounded.
 OPENAI_TIMEOUT_SECONDS = 300.0
 OPENAI_MAX_RETRIES = 1
+# Tools whose result belongs to the caller, not to the model: they write into the
+# `collect` sink and have nothing to report back. A reply that carries text AND only
+# these needs no further round trip — and asking for one is what produced an empty
+# follow-up reply and "model returned no text".
+_SIDE_CHANNEL_TOOLS = {"record_memo", "propose_review_post"}
 
 _TICK_RULE = ("judged on TSS vs expected load, RPE, feel, interval execution and decoupling. "
               "If the coach_ticks list is empty, post the comment without a tick_id — never refuse to comment.")
@@ -1018,6 +1023,11 @@ class TrainingAgent:
         items = list(input_items)  # never mutate the caller's list
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
                  "reasoning_tokens": 0, "cached_tokens": 0}
+        # One reply can carry BOTH a message and a function_call, and this loop used
+        # to read the text only when there were no calls — so an answer written in
+        # the same reply as a tool call was discarded, and the model had nothing left
+        # to say on the next turn.
+        pending_text = ""
 
         for _ in range(max_iterations):
             response = self._create_response(
@@ -1053,14 +1063,18 @@ class TrainingAgent:
             # dumps emit nulls the API rejects), and never persist this list.
             items += response.output
 
+            if response.output_text:
+                pending_text = response.output_text
+
             calls = [it for it in response.output if it.type == "function_call"]
             if not calls:
-                text = response.output_text
+                text = response.output_text or pending_text
                 if not text:
                     raise RuntimeError(
                         f"{label}: model returned no text "
                         f"(status={response.status}, "
-                        f"incomplete={response.incomplete_details})"
+                        f"incomplete={response.incomplete_details}, "
+                        f"output={[getattr(it, 'type', '?') for it in response.output]})"
                     )
                 return text, usage
 
@@ -1081,6 +1095,13 @@ class TrainingAgent:
                     "call_id": call.call_id,
                     "output": self._run_tool(call.name, args, collect),
                 })
+
+            # The answer is already written and every call was a side channel, so
+            # there is nothing to go back for. Saves a full iteration — which means a
+            # full re-send of everything above — on every auto-review, recap and
+            # review-post offer.
+            if pending_text and all(c.name in _SIDE_CHANNEL_TOOLS for c in calls):
+                return pending_text, usage
 
             if usage["total_tokens"] > MAX_LOOP_TOKENS:
                 raise RuntimeError(

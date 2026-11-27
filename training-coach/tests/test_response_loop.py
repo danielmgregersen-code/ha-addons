@@ -527,5 +527,77 @@ class TestEveryPromptStillFormats(unittest.TestCase):
         del agent
 
 
+class TestTextArrivingWithACall(unittest.TestCase):
+    """The reported failure: "model returned no text (status=completed)".
+
+    One reply can carry both a message and a function_call. The loop read the text
+    only when there were no calls, so an answer written in the same reply as
+    propose_review_post was discarded — and the model, having already said
+    everything, returned an empty reply that the loop reported as an error."""
+
+    REVIEW = "Three reps at 270 W, all inside the band, fade -0.4%."
+
+    def _real_dispatch(self, agent):
+        from agent import TrainingAgent
+        agent._run_tool = TrainingAgent._run_tool.__get__(agent)
+        return agent
+
+    def test_a_review_offered_in_the_same_reply_is_not_lost(self):
+        agent = self._real_dispatch(make_agent([
+            FakeResponse([_message(self.REVIEW),
+                          _call("c1", "propose_review_post",
+                                json.dumps({"activity_id": "i172850190", "tick": 4}))]),
+        ]))
+        reply, _history, _usage = agent.chat("in-depth review please", [], mode="review")
+        self.assertIn(self.REVIEW, reply)
+        self.assertIn("[[PROPOSE_REVIEW_POST activity_id=i172850190 tick=4]]", reply)
+        self.assertEqual(len(agent.seen), 1, "no second round trip is needed")
+
+    def test_a_memo_in_the_same_reply_costs_no_extra_call(self):
+        agent = self._real_dispatch(make_agent([
+            FakeResponse([_message(self.REVIEW),
+                          _call("c1", "record_memo", json.dumps({"text": "Held the band."}))]),
+        ]))
+        collected = {}
+        text, _usage = agent._run_response_loop(
+            model="gpt-5.6", input_items=[{"role": "user", "content": "review"}],
+            tools=TOOLS, max_iterations=5, label="t", collect=collected)
+        self.assertEqual(text, self.REVIEW)
+        self.assertEqual(collected["memo"], "Held the band.")
+        self.assertEqual(len(agent.seen), 1)
+        self.assertIn("[[MEMO Held the band.]]", agent._with_memo(text, collected))
+
+    def test_a_real_tool_call_beside_text_still_continues(self):
+        """The short-circuit must not swallow work the model still owes."""
+        agent = make_agent([
+            FakeResponse([_message("Let me look at the intervals."),
+                          _call("c1", "get_activity_intervals",
+                                json.dumps({"activity_id": "i1"}))]),
+            FakeResponse([_message("Final answer.")]),
+        ])
+        text, _usage = loop(agent)
+        self.assertEqual(text, "Final answer.")
+        self.assertEqual(len(agent.seen), 2)
+        self.assertEqual(agent.tools_run[0][0], "get_activity_intervals")
+
+    def test_earlier_text_is_returned_when_the_last_reply_is_empty(self):
+        """The belt to the short-circuit's braces: a mixed call set, then nothing."""
+        agent = make_agent([
+            FakeResponse([_message("The analysis."),
+                          _call("c1", "get_coach_ticks", "{}")]),
+            FakeResponse([]),
+        ])
+        text, _usage = loop(agent)
+        self.assertEqual(text, "The analysis.")
+
+    def test_a_reply_with_nothing_at_all_still_raises_and_says_what_came_back(self):
+        agent = make_agent([FakeResponse([_reasoning()])])
+        with self.assertRaises(RuntimeError) as ctx:
+            loop(agent)
+        message = str(ctx.exception)
+        self.assertIn("returned no text", message)
+        self.assertIn("reasoning", message, "the error must name what it did receive")
+
+
 if __name__ == "__main__":
     unittest.main()
